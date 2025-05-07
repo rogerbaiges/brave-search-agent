@@ -14,7 +14,7 @@ BRAVE_API_KEY = os.getenv("BRAVE_API_KEY")
 
 # --- Brave Search API Interaction Class ---
 
-class BraveSearch:
+class BraveSearchManual:
     """Handles interactions with the Brave Search API."""
     BASE_URL = "https://api.search.brave.com/res/v1/web/search"
 

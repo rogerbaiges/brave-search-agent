@@ -8,6 +8,7 @@ import concurrent.futures
 import time
 
 from langchain_community.tools import BraveSearch
+from brave_search_api import BraveSearchManual
 
 from dotenv import load_dotenv
 import os
@@ -20,8 +21,10 @@ from langchain_core.tools import tool, ToolException
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage, BaseMessage
 
+
 # --- Web Scraping Helper ---
-def _scrape_and_extract_text(url: str, timeout: int = 5, max_chars: int = 3000) -> Optional[str]:
+# (Keep the function exactly as before)
+def _scrape_and_extract_text(url: str, timeout: int = 10, max_chars: int = 4000) -> Optional[str]:
     """Fetches and extracts text content from a URL, returning up to max_chars or None."""
     try:
         headers = {
@@ -53,9 +56,10 @@ def _scrape_and_extract_text(url: str, timeout: int = 5, max_chars: int = 3000) 
 
 
 # --- Combined Search and Scrape Tool (Concurrent) ---
-if BraveSearch and BRAVE_API_KEY:
+# (Keep the tool function exactly as before)
+if BraveSearchManual and BRAVE_API_KEY:
     try:
-        brave_search_client = BraveSearch(api_key=BRAVE_API_KEY)
+        brave_search_client = BraveSearchManual(api_key=BRAVE_API_KEY)
         print("BraveSearch client initialized.")
     except ValueError as e:
         print(f"Error initializing BraveSearch: {e}", file=sys.stderr)
@@ -64,16 +68,16 @@ else:
     brave_search_client = None
 
 @tool
-def search_and_scrape_web(query: str, k: int = 2) -> dict:
+def search_and_scrape_web(query: str, k: int = 3) -> dict:
     """
-    Searches web (Brave Search), concurrently scrapes content from top 'k' results (max 3).
+    Searches web (Brave Search), concurrently scrapes content from top 'k' results (max 5).
     Use ONLY for recent/specific info NOT in internal knowledge. Be specific.
     """
     if not brave_search_client:
          raise ToolException("Brave search client not available.")
 
     print(f"--- TOOL: Searching '{query}' (k={k}) ---", file=sys.stderr)
-    num_to_scrape = min(k, 3)  # Reduced from 5 to 3
+    num_to_scrape = min(k, 5)
     if num_to_scrape <= 0:
          raise ToolException("k must be positive.")
 
@@ -107,6 +111,7 @@ def search_and_scrape_web(query: str, k: int = 2) -> dict:
         raise ToolException(f"Unexpected error in search/scrape tool: {e}")
 
 
+
 # --- Optimized Brave Search Tool ---
 brave_tool = BraveSearch.from_api_key(api_key=BRAVE_API_KEY, search_kwargs={"count": 2})  # Reduced count
 
@@ -118,12 +123,14 @@ class OptimizedLangchainAgent:
     """
     def __init__(self,
                  model_name: str = "qwen2.5:3b",
-                 tools: List[Callable] = [brave_tool],
+                 tools: List[Callable] = [brave_tool, search_and_scrape_web],
                  system_message: str = (
-                    "You are a helpful assistant. Answer using internal knowledge IF confident. "
-                    "Use tools ONLY for recent/specific information. "
+                    "You are a helpful assistant. "
+                    "Answer using internal knowledge for basic facts like capitals common historical events, and general knowledge."
+                    "Use tools ONLY for recent news, specific statistics, or information that might have changed recently."
                     "Use `BraveSearch` for general info, headlines, or to know what's trending. "
-                    "Do NOT use the tool for common knowledge, creative tasks, or known summaries. "
+                    "Use `search_and_scrape_web` for specific recent information, like news articles or specific events. "
+                    "Do NOT use the tool for common knowledge, geographical information, creative tasks, or known summaries. "
                     "If using tool, state you are searching, then answer based ONLY on tool results."
                  ),
                  verbose_agent: bool = False
@@ -240,10 +247,12 @@ class OptimizedLangchainAgent:
                 process_start = time.time()
                 print("--- Agent: Processing search results ---", file=sys.stderr)
                 final_formatted_messages = self._format_messages(task, optimized_messages, is_tool_processing=True)
-                
+                print(final_formatted_messages)
                 # Stream the response
                 print("--- Agent: Streaming final response ---", file=sys.stderr)
-                for chunk in self.llm_with_tools.stream(final_formatted_messages):
+                #for chunk in self.llm_with_tools.stream(final_formatted_messages):
+                for chunk in self.llm.stream(final_formatted_messages):
+
                     if isinstance(chunk, AIMessageChunk) and chunk.content:
                         yield chunk.content
                 
@@ -251,7 +260,7 @@ class OptimizedLangchainAgent:
             else:
                 # === Direct Answer (No Tools Called) ===
                 print("--- Agent: Answering directly (streaming) ---", file=sys.stderr)
-                for chunk in self.llm_with_tools.stream(formatted_messages):
+                for chunk in self.llm.stream(formatted_messages):
                     if isinstance(chunk, AIMessageChunk) and chunk.content:
                         yield chunk.content
 
@@ -282,14 +291,14 @@ def main():
         print()
         print(separator)
 
-        # --- Task 2 ---
+        # # --- Task 2 ---
         task2 = "What are the latest developments regarding the Artemis program missions?"
         for token in langchain_agent.run(task2):
             print(token, end="", flush=True)
         print()
         print(separator)
 
-        # --- Task 3 ---
+        # # --- Task 3 ---
         task3 = "Write a short haiku about a web scraping robot."
         for token in langchain_agent.run(task3):
             print(token, end="", flush=True)
