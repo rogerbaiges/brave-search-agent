@@ -247,7 +247,6 @@ class OptimizedLangchainAgent:
                 process_start = time.time()
                 print("--- Agent: Processing search results ---", file=sys.stderr)
                 final_formatted_messages = self._format_messages(task, optimized_messages, is_tool_processing=True)
-                print(final_formatted_messages)
                 # Stream the response
                 print("--- Agent: Streaming final response ---", file=sys.stderr)
                 #for chunk in self.llm_with_tools.stream(final_formatted_messages):
