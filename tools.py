@@ -76,7 +76,7 @@ def search_and_scrape_web(query: str, k: int = 3) -> dict:
          raise ToolException("k must be positive.")
 
     try:
-        initial_results = brave_search_client.search(query, count=num_to_scrape)
+        initial_results = brave_search_client.search_web(query, count=num_to_scrape)
         urls_to_scrape = [r.get("url") for r in initial_results if r.get("url")]
         if not urls_to_scrape: return {"results": []}
 
@@ -206,7 +206,7 @@ def find_interesting_links(query: str, k: int = 5) -> str:
 
     try:
         # First, get search results
-        search_results = brave_search_client.search(query, count=num_results)
+        search_results = brave_search_client.search_web(query, count=num_results)
         if not search_results:
             return {"links": [], "message": "No results found."}
 
@@ -269,10 +269,9 @@ def find_interesting_links(query: str, k: int = 5) -> str:
         raise ToolException(f"Unexpected error in find_interesting_links tool: {e}")
 
 # --- Screenshot Tool ---
-@tool
 def take_screenshot(
     url: str,
-    output_path: str = "/screenshots/screenshot.png",
+    output_path: str = "screenshot.png",
     full_page: bool = False,
 ) -> None:
     """Capture a screenshot of a web page while programmatically hiding most cookie-, banner-,
@@ -326,8 +325,6 @@ def take_screenshot(
         pointer-events: none !important;
     }
     """
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
     def _block_captcha(route: Route, request: Request) -> None:  # noqa: D401
         """Abort obvious CAPTCHA and tracker requests to reduce overlay risk."""
         url_low = request.url.lower()
@@ -373,3 +370,58 @@ def take_screenshot(
         page.screenshot(path=str(output_path), full_page=full_page)
 
         browser.close()
+
+# --- Brave Image Search Tool ---
+@tool
+def search_images(query: str, k: int = 5) -> dict:
+    """
+    Search Brave Image API and return up to *k* images.
+
+    Args:
+        query: Image search query.
+        k: Desired number of image results (max 20).
+
+    Returns:
+        A ``dict`` with key ``images`` containing a list of image-result
+        dictionaries ``{title, page_url, image_url, thumbnail_url, source}``.
+    """
+    if not brave_search_client:
+        raise ToolException("Brave search client not available.")
+
+    if k <= 0:
+        raise ToolException("k must be positive.")
+
+    try:
+        images = brave_search_client.search_images(query, count=k)
+        return {"images": images}
+    except ToolException:
+        raise
+    except Exception as e:
+        raise ToolException(f"Unexpected error in search_images tool: {e}")
+
+# --- Brave News Search Tool ---
+@tool
+def search_news(query: str, k: int = 5) -> dict:
+    """
+    Searches Brave News API and returns up to *k* news articles.
+
+    Args:
+        query: News search query.
+        k: Desired number of articles (max 20).
+
+    Returns:
+        dict with key ``news`` containing a list of
+        ``{title, url, description, published}`` dictionaries.
+    """
+    if not brave_search_client:
+        raise ToolException("Brave search client not available.")
+    if k <= 0:
+        raise ToolException("k must be positive.")
+
+    try:
+        news_items = brave_search_client.search_news(query, count=k)
+        return {"news": news_items}
+    except ToolException:
+        raise
+    except Exception as e:
+        raise ToolException(f"Unexpected error in search_news tool: {e}")

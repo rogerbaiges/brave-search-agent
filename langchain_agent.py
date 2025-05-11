@@ -85,7 +85,7 @@ def search_and_scrape_web(query: str, k: int = 3) -> dict:
          raise ToolException("k must be positive.")
 
     try:
-        initial_results = brave_search_client.search(query, count=num_to_scrape)
+        initial_results = brave_search_client.search_web(query, count=num_to_scrape)
         urls_to_scrape = [r.get("url") for r in initial_results if r.get("url")]
         if not urls_to_scrape: return {"results": []}
 
