@@ -10,6 +10,8 @@ from langchain.tools import tool
 from langchain_core.tools import ToolException
 from langchain_community.tools import BraveSearch
 
+from config import VERBOSE
+
 from brave_search_api import BraveSearchManual
 
 from dotenv import load_dotenv
@@ -49,7 +51,7 @@ def _scrape_and_extract_text(url: str, timeout: int = 10, max_chars: int = 4000)
     except requests.exceptions.Timeout: return None
     except requests.exceptions.RequestException: return None
     except Exception as e:
-        print(f"--- Scraping Error (Parsing/Other): {url} - {e} ---", file=sys.stderr)
+        if VERBOSE: print(f"--- Scraping Error (Parsing/Other): {url} - {e} ---", file=sys.stderr)
         return None
 
 # --- Combined Search and Scrape Tool (Concurrent) ---
@@ -65,7 +67,7 @@ def search_and_scrape_web(query: str, k: int = 3) -> dict:
         raise ToolException("Brave search client not available.")
     
 
-    print(f"--- TOOL: Searching '{query}' (k={k}) ---", file=sys.stderr)
+    if VERBOSE: print(f"--- TOOL: Searching '{query}' (k={k}) ---", file=sys.stderr)
     num_to_scrape = min(k, 5)
     if num_to_scrape <= 0:
          raise ToolException("k must be positive.")
@@ -75,7 +77,7 @@ def search_and_scrape_web(query: str, k: int = 3) -> dict:
         urls_to_scrape = [r.get("url") for r in initial_results if r.get("url")]
         if not urls_to_scrape: return {"results": []}
 
-        print(f"--- TOOL: Starting concurrent scraping for {len(urls_to_scrape)} URLs... ---", file=sys.stderr)
+        if VERBOSE: print(f"--- TOOL: Starting concurrent scraping for {len(urls_to_scrape)} URLs... ---", file=sys.stderr)
         with concurrent.futures.ThreadPoolExecutor(max_workers=num_to_scrape) as executor:
             future_to_url = {executor.submit(_scrape_and_extract_text, url): url for url in urls_to_scrape}
             scrape_results_map = {}
@@ -84,19 +86,19 @@ def search_and_scrape_web(query: str, k: int = 3) -> dict:
                 try:
                     scrape_results_map[url] = future.result()
                 except Exception as exc:
-                    print(f'--- TOOL: Scraping thread exception for {url}: {exc} ---', file=sys.stderr)
+                    if VERBOSE: print(f'--- TOOL: Scraping thread exception for {url}: {exc} ---', file=sys.stderr)
                     scrape_results_map[url] = None
 
         final_scraped_results = [
             {"url": url, "content": scrape_results_map.get(url)}
             for url in urls_to_scrape
         ]
-        print(f"--- TOOL: Returning {len(final_scraped_results)} results ---", file=sys.stderr)
+        if VERBOSE: print(f"--- TOOL: Returning {len(final_scraped_results)} results ---", file=sys.stderr)
         return {"results": final_scraped_results}
 
     except ToolException: raise
     except Exception as e:
-        print(f"--- TOOL ERROR (Orchestration): {e} ---", file=sys.stderr)
+        if VERBOSE: print(f"--- TOOL ERROR (Orchestration): {e} ---", file=sys.stderr)
         raise ToolException(f"Unexpected error in search/scrape tool: {e}")
     
 
@@ -194,7 +196,7 @@ def find_interesting_links(query: str, k: int = 5) -> str:
     if not brave_search_client:
         raise ToolException("Brave search client not available.")
 
-    print(f"--- TOOL: Finding interesting links for '{query}' (k={k}) ---", file=sys.stderr)
+    if VERBOSE: print(f"--- TOOL: Finding interesting links for '{query}' (k={k}) ---", file=sys.stderr)
     num_results = min(k, 5)
     if num_results <= 0:
         raise ToolException("k must be positive.")
@@ -225,7 +227,7 @@ def find_interesting_links(query: str, k: int = 5) -> str:
         urls_to_extract = [r.get("url") for r in search_results[:5] if r.get("url")]
         
         if urls_to_extract:
-            print(f"--- TOOL: Extracting links from {len(urls_to_extract)} top pages... ---", file=sys.stderr)
+            if VERBOSE: print(f"--- TOOL: Extracting links from {len(urls_to_extract)} top pages... ---", file=sys.stderr)
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(urls_to_extract)) as executor:
                 futures = {executor.submit(_extract_links_and_metadata, url): url for url in urls_to_extract}
                 
@@ -239,7 +241,7 @@ def find_interesting_links(query: str, k: int = 5) -> str:
                                 link["source"] = f"extracted_from_{url}"
                             all_links.extend(links[:10])  # Limit to top 5 links per page
                     except Exception as e:
-                        print(f"--- TOOL: Link extraction error for {url}: {e} ---", file=sys.stderr)
+                        if VERBOSE: print(f"--- TOOL: Link extraction error for {url}: {e} ---", file=sys.stderr)
 
         # Deduplicate links by URL
         seen_urls = set()
@@ -252,7 +254,7 @@ def find_interesting_links(query: str, k: int = 5) -> str:
         # Limit total number of links to return
         final_links = unique_links[:10]  # Return at most 10 unique links
         
-        print(f"--- TOOL: Returning {len(final_links)} interesting links ---", file=sys.stderr)
+        if VERBOSE: print(f"--- TOOL: Returning {len(final_links)} interesting links ---", file=sys.stderr)
         return json.dumps({
             "links": final_links,
             "message": f"Found {len(final_links)} interesting links related to '{query}'."

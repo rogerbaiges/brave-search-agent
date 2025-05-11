@@ -3,8 +3,9 @@ import re
 import json
 import traceback
 import requests
-from typing import List, Dict, Any, Optional
-from bs4 import BeautifulSoup
+from typing import List, Dict, Any
+
+from config import VERBOSE
 
 from dotenv import load_dotenv
 
@@ -18,9 +19,10 @@ class BraveSearchManual:
     """Handles interactions with the Brave Search API."""
     BASE_URL = "https://api.search.brave.com/res/v1/web/search"
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, verbose: bool = VERBOSE):
         if not api_key:
             raise ValueError("Brave API key is required.")
+        self.verbose = verbose
         self.api_key = api_key
         self.headers = {
             "Accept": "application/json",
@@ -46,7 +48,7 @@ class BraveSearchManual:
             "count": min(count, 20), # Respect API max limit
             **kwargs
         }
-        print(f"--- Brave API Call Params: {params} ---")
+        if self.verbose: print(f"--- Brave API Call Params: {params} ---")
         try:
             response = requests.get(self.BASE_URL, headers=self.headers, params=params, timeout=10)
             response.raise_for_status() # Check for HTTP errors
@@ -59,7 +61,7 @@ class BraveSearchManual:
                 "url": r.get("url"),
                 "description": r.get("description")
                 } for r in results if r.get("url")] # Ensure URL exists
-            print(f"--- Brave API Returned {len(sanitized_results)} results ---")
+            if self.verbose: print(f"--- Brave API Returned {len(sanitized_results)} results ---")
             return sanitized_results
         except requests.exceptions.RequestException as e:
             print(f"--- Brave API Error: Request failed: {e} ---")

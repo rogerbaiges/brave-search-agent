@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Too
 from tools import brave_tool, search_and_scrape_web, find_interesting_links
 
 # Model names import
-from config import MAIN_MODEL, LAYOUT_MODEL
+from config import MAIN_MODEL, LAYOUT_MODEL, VERBOSE
 
 class OptimizedLangchainAgent:
     """
@@ -36,13 +36,13 @@ class OptimizedLangchainAgent:
                     "When using a tool, state that you are searching, then answer based ONLY on tool results."
                     "Always aim to provide useful links that expand on your answer when relevant."
                  ),
-                 verbose_agent: bool = False
+                 verbose_agent: bool = VERBOSE
                  ):
         """Initializes the agent with optimized parameters."""
         self.model_name = model_name
         self.tools = [t for t in tools if callable(t)]
         if not self.tools:
-             print("Warning: No valid tools provided.", file=sys.stderr)
+            print("Warning: No valid tools provided.", file=sys.stderr)
         self.verbose_agent = verbose_agent
         self.tool_map = {tool.name: tool for tool in self.tools}
 
@@ -52,7 +52,7 @@ class OptimizedLangchainAgent:
             # Bind tools for easy use later
             self.llm_with_tools = self.llm.bind_tools(self.tools)
             _ = self.llm.invoke("OK")  # Simple connection check
-            print(f"Successfully connected to Ollama model '{self.model_name}'.")
+            if self.verbose_agent: print(f"Successfully connected to Ollama model '{self.model_name}'.")
         except Exception as e:
             print(f"Error initializing/connecting to Ollama model '{self.model_name}'. Details: {e}", file=sys.stderr)
             sys.exit(1)
@@ -112,8 +112,9 @@ class OptimizedLangchainAgent:
         Executes a task with optimized processing for faster responses.
         Always attempts to find interesting links for most queries.
         """
-        print(f"\n--- Task Received ---\n{task}")
-        print("\n--- Agent Response ---")
+        if self.verbose_agent:
+            print(f"\n--- Task Received ---\n{task}")
+            print("\n--- Agent Response ---")
         start_time = time.time()
 
         # Start with just the human input
@@ -128,21 +129,21 @@ class OptimizedLangchainAgent:
             # === Tool Execution (If Needed) ===
             tool_used = False
             if first_response.tool_calls:
-                print("--- Agent: Decided to use tools ---", file=sys.stderr)
+                if self.verbose_agent: print("--- Agent: Decided to use tools ---", file=sys.stderr)
                 tool_messages = []
                 for tool_call in first_response.tool_calls:
                     tool_name = tool_call["name"]
                     tool_start = time.time()
-                    print(f"--- Agent: Calling tool '{tool_name}' ---", file=sys.stderr)
+                    if self.verbose_agent: print(f"--- Agent: Calling tool '{tool_name}' ---", file=sys.stderr)
                     if tool_name in self.tool_map:
                         selected_tool = self.tool_map[tool_name]
                         tool_output = selected_tool.invoke(tool_call)
                         tool_messages.append(tool_output)
                         tool_used = True
-                        print(f"--- Agent: Tool '{tool_name}' completed in {time.time() - tool_start:.2f}s ---", file=sys.stderr)
+                        if self.verbose_agent: print(f"--- Agent: Tool '{tool_name}' completed in {time.time() - tool_start:.2f}s ---", file=sys.stderr)
                     else:
                         error_msg = f"Tool '{tool_name}' not found."
-                        print(f"--- Agent Error: {error_msg} ---", file=sys.stderr)
+                        if self.verbose_agent: print(f"--- Agent Error: {error_msg} ---", file=sys.stderr)
                         tool_messages.append(ToolMessage(content=error_msg, tool_call_id=tool_call["id"]))
                 messages.extend(tool_messages)
                 
@@ -151,7 +152,7 @@ class OptimizedLangchainAgent:
                 link_tool_called = any(tc["name"] == "find_interesting_links" for tc in first_response.tool_calls)
                 
                 if not link_tool_called and tool_used and "find_interesting_links" in self.tool_map:
-                    print("--- Agent: Automatically finding interesting links ---", file=sys.stderr)
+                    if self.verbose_agent: print("--- Agent: Automatically finding interesting links ---", file=sys.stderr)
                     try:
                         link_tool = self.tool_map["find_interesting_links"]
                         # Create a properly formatted invocation using the tool's invoke method
@@ -163,7 +164,7 @@ class OptimizedLangchainAgent:
                         )
                         messages.append(tool_message)
                     except Exception as e:
-                        print(f"--- Agent: Auto link finding failed: {e} ---", file=sys.stderr)
+                        if self.verbose_agent: print(f"--- Agent: Auto link finding failed: {e} ---", file=sys.stderr)
 
                 # === Optimization: Apply truncation to tool results ===
                 # optimized_messages = self._truncate_tool_results(messages)
@@ -171,18 +172,18 @@ class OptimizedLangchainAgent:
                 
                 # === Second LLM Call with special prompt for processing tool results ===
                 process_start = time.time()
-                print("--- Agent: Processing search results and links ---", file=sys.stderr)
+                if self.verbose_agent: print("--- Agent: Processing search results and links ---", file=sys.stderr)
                 final_formatted_messages = self._format_messages(task, optimized_messages, is_tool_processing=True)
                 # Stream the response
-                print("--- Agent: Streaming final response ---", file=sys.stderr)
+                if self.verbose_agent: print("--- Agent: Streaming final response ---", file=sys.stderr)
                 for chunk in self.llm.stream(final_formatted_messages):
                     if isinstance(chunk, AIMessageChunk) and chunk.content:
                         yield chunk.content
                 
-                print(f"--- Processing completed in {time.time() - process_start:.2f}s ---", file=sys.stderr)
+                if self.verbose_agent: print(f"--- Processing completed in {time.time() - process_start:.2f}s ---", file=sys.stderr)
             else:
                 # === Even for direct answers, try to find relevant links ===
-                print("--- Agent: Answering directly but still finding links ---", file=sys.stderr)
+                if self.verbose_agent: print("--- Agent: Answering directly but still finding links ---", file=sys.stderr)
                 
                 # First yield the direct answer
                 direct_answer_chunks = []
@@ -238,13 +239,13 @@ class OptimizedLangchainAgent:
                                 else:
                                     yield "No additional resources found.\n"
                         except Exception as e:
-                            print(f"--- Agent: Link processing error: {e} ---", file=sys.stderr)
+                            if self.verbose_agent: print(f"--- Agent: Link processing error: {e} ---", file=sys.stderr)
                             # Don't show error to user - just continue
                     except Exception as e:
-                        print(f"--- Agent: Link finding failed: {e} ---", file=sys.stderr)
+                        if self.verbose_agent: print(f"--- Agent: Link finding failed: {e} ---", file=sys.stderr)
                         # Don't show error to user - just continue
 
-            print(f"--- Total time: {time.time() - start_time:.2f}s ---", file=sys.stderr)
+            if self.verbose_agent: print(f"--- Total time: {time.time() - start_time:.2f}s ---", file=sys.stderr)
 
         except Exception as e:
             print(f"\n--- Error during Agent Execution: {e} ---", file=sys.stderr)
@@ -255,7 +256,7 @@ class OptimizedLangchainAgent:
 # --- Example Usage ---
 def main():
     try:
-        langchain_agent = OptimizedLangchainAgent(verbose_agent=False)
+        langchain_agent = OptimizedLangchainAgent()
 
         separator = "\n" + "="*60
 
