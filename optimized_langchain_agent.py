@@ -195,9 +195,7 @@ class OptimizedLangchainAgent:
                 # Then try to find relevant links
                 if "find_interesting_links" in self.tool_map:
                     try:
-                        # Don't print this to user - just gather the links
-                        yield "\n\n**Relevant resources:**\n"
-                        
+                    
                         # Use the proper invoke method with a dictionary of arguments
                         link_tool = self.tool_map["find_interesting_links"]
                         link_result = link_tool.invoke({"query": task, "k": 3})
@@ -221,23 +219,23 @@ class OptimizedLangchainAgent:
                             else:
                                 links = []
                                 
-                                if links:
-                                    for i, link in enumerate(links[:5]):  # Limit to top 5
-                                        title = link.get("title", "Resource")
-                                        url = link.get("url", "")
-                                        desc = link.get("description", "")
-                                        
-                                        # Format as markdown link with brief description
-                                        link_text = f"- [{title}]({url})"
-                                        if desc and len(desc) > 20:  # Only add description if meaningful
-                                            # Truncate long descriptions
-                                            if len(desc) > 100:
-                                                desc = desc[:97] + "..."
-                                            link_text += f": {desc}"
-                                        
-                                        yield link_text + "\n"
-                                else:
-                                    yield "No additional resources found.\n"
+                            if links:
+                                for i, link in enumerate(links[:5]):  # Limit to top 5
+                                    title = link.get("title", "Resource")
+                                    url = link.get("url", "")
+                                    desc = link.get("description", "")
+                                    
+                                    # Format as markdown link with brief description
+                                    link_text = f"- [{title}]({url})"
+                                    if desc and len(desc) > 20:  # Only add description if meaningful
+                                        # Truncate long descriptions
+                                        if len(desc) > 100:
+                                            desc = desc[:97] + "..."
+                                        link_text += f": {desc}"
+                                    
+                                    yield link_text + "\n"
+                            else:
+                                yield "No additional resources found.\n"
                         except Exception as e:
                             if self.verbose_agent: print(f"--- Agent: Link processing error: {e} ---", file=sys.stderr)
                             # Don't show error to user - just continue

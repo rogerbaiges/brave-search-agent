@@ -168,13 +168,13 @@ def _extract_links_and_metadata(url: str, timeout: int = 10) -> Optional[List[Di
         
         return unique_links[:10]  
     except requests.exceptions.Timeout:
-        print(f"--- Link Extraction Timeout: {url} ---", file=sys.stderr)
+        if VERBOSE: print(f"--- Link Extraction Timeout: {url} ---", file=sys.stderr)
         return []
     except requests.exceptions.RequestException as e:
-        print(f"--- Link Extraction RequestException: {url} - {e} ---", file=sys.stderr)
+        if VERBOSE: print(f"--- Link Extraction RequestException: {url} - {e} ---", file=sys.stderr)
         return []
     except Exception as e:
-        print(f"--- Link Extraction Error: {url} - {e} ---", file=sys.stderr)
+        if VERBOSE: print(f"--- Link Extraction Error: {url} - {e} ---", file=sys.stderr)
         return []
 
 
