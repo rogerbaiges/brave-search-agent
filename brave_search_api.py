@@ -57,8 +57,10 @@ class BraveSearchManual:
             response = requests.get(self.BASE_WEB_URL, headers=self.headers, params=params, timeout=10)
             response.raise_for_status() # Check for HTTP errors
             data = response.json()
+
             # Extract relevant web results (structure might vary slightly)
             results = data.get("web", {}).get("results", [])
+
             # Sanitize results slightly
             sanitized_results = [{
                 "title": r.get("title"),
@@ -66,7 +68,9 @@ class BraveSearchManual:
                 "description": r.get("description")
                 } for r in results if r.get("url")] # Ensure URL exists
             if self.verbose: print(f"--- Brave API Returned {len(sanitized_results)} results ---")
+
             return sanitized_results
+        
         except requests.exceptions.RequestException as e:
             print(f"--- Brave API Error: Request failed: {e} ---")
             # Raise ToolException so Langchain AgentExecutor can potentially handle it
@@ -137,51 +141,41 @@ class BraveSearchManual:
         except Exception as e:
             raise ToolException(f"Unexpected error during Brave image search: {e}") from e
         
-    def search_news(self, query: str, count: int = 5, **kwargs) -> List[Dict[str, Any]]:
-        """
-        Performs a news search using Brave’s News endpoint.
-
+    def search_news(self, query: str, count: int = 5, **kwargs):
+        """Searches Brave News API.
         Args:
-            query: The search query string.
-            count: Number of news items requested (default 5, max 20).
-            **kwargs: Additional Brave API query parameters (e.g., country, search_lang).
-
+            query: Search string.
+            count: Number of results requested (≤ 20).
+            **kwargs: Other Brave API parameters (``search_lang``, ``country`` …).
         Returns:
-            A list of dictionaries with keys: ``title``, ``url``, ``description``, ``published``.
+            A list of news-result dictionaries with keys:
+            ``title``, ``url``, ``description``.
         """
-        params = {
-            "q": query,
-            "count": min(count, 20),
-            **kwargs,
-        }
+        params = {"q": query, "count": min(count, 20), **kwargs}
         if self.verbose:
             print(f"--- Brave NEWS API Call Params: {params} ---")
 
         try:
-            resp = requests.get(self.BASE_NEWS_URL, headers=self.headers, params=params, timeout=10)
+            resp = requests.get(self.BASE_NEWS_URL,
+                                headers=self.headers,
+                                params=params,
+                                timeout=10)
             resp.raise_for_status()
             data = resp.json()
 
-            results = data.get("news", {}).get("results", [])
+            results = data.get("results", [])
+
             sanitized = [
                 {
                     "title": r.get("title"),
                     "url": r.get("url"),
                     "description": r.get("description"),
-                    "published": r.get("published_at") or r.get("date") or r.get("published"),
                 }
-                for r in results
-                if r.get("url")
+                for r in results if r.get("url")
             ]
-
             if self.verbose:
                 print(f"--- Brave NEWS API returned {len(sanitized)} results ---")
-
             return sanitized
 
         except requests.exceptions.RequestException as e:
             raise ToolException(f"Brave News API request failed: {e}") from e
-        except json.JSONDecodeError as e:
-            raise ToolException(f"Brave News API response parsing failed: {e}") from e
-        except Exception as e:
-            raise ToolException(f"Unexpected error during Brave news search: {e}") from e
