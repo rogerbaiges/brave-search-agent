@@ -8,14 +8,14 @@ import concurrent.futures
 
 # Assume brave_search_api.py contains the BraveSearch class and BRAVE_API_KEY setup
 try:
-    from brave_search_api import BraveSearch, BRAVE_API_KEY
+    from brave_search_api import BraveSearchManual, BRAVE_API_KEY
 except ImportError:
     print("Error: Could not import BraveSearch class.", file=sys.stderr)
     from dotenv import load_dotenv
     import os
     load_dotenv()
     BRAVE_API_KEY = os.getenv("BRAVE_API_KEY")
-    BraveSearch = None
+    BraveSearchManual = None
 
 # Langchain imports
 from langchain_ollama.chat_models import ChatOllama
@@ -60,9 +60,9 @@ def _scrape_and_extract_text(url: str, timeout: int = 10, max_chars: int = 4000)
 
 # --- Combined Search and Scrape Tool (Concurrent) ---
 # (Keep the tool function exactly as before)
-if BraveSearch and BRAVE_API_KEY:
+if BraveSearchManual and BRAVE_API_KEY:
     try:
-        brave_search_client = BraveSearch(api_key=BRAVE_API_KEY)
+        brave_search_client = BraveSearchManual(api_key=BRAVE_API_KEY)
         print("BraveSearch client initialized.")
     except ValueError as e:
         print(f"Error initializing BraveSearch: {e}", file=sys.stderr)
@@ -122,7 +122,7 @@ class LangchainAgent:
     Manually streams the final LLM response token-by-token in the run() method.
     """
     def __init__(self,
-                 model_name: str = "qwen2.5:3b",
+                 model_name: str = "qwen2.5:7b",
                  tools: List[Callable] = [search_and_scrape_web],
                  system_message: str = (
                      "You are a helpful assistant. Answer using internal knowledge IF confident. "
@@ -236,7 +236,7 @@ def main():
          print("\nWARNING: Brave search client not initialized.", file=sys.stderr)
 
     try:
-        langchain_agent = LangchainAgent(model_name="qwen2.5:3b", verbose_agent=False)
+        langchain_agent = LangchainAgent(model_name="qwen2.5:7b", verbose_agent=False)
 
         separator = "\n" + "="*60
 
