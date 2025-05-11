@@ -3,9 +3,10 @@ import traceback
 import requests
 from bs4 import BeautifulSoup
 import re
-from typing import List, Optional, Callable, Iterator, Dict
+from typing import List, Optional, Callable, Iterator, Dict, Tuple
 import concurrent.futures
 import time
+import json
 
 from langchain_community.tools import BraveSearch
 from brave_search_api import BraveSearchManual
@@ -23,7 +24,6 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Too
 
 
 # --- Web Scraping Helper ---
-# (Keep the function exactly as before)
 def _scrape_and_extract_text(url: str, timeout: int = 10, max_chars: int = 4000) -> Optional[str]:
     """Fetches and extracts text content from a URL, returning up to max_chars or None."""
     try:
@@ -55,8 +55,20 @@ def _scrape_and_extract_text(url: str, timeout: int = 10, max_chars: int = 4000)
         return None
 
 
+def _extract_links_and_metadata(url: str, timeout: int = 10) -> Optional[List[Dict]]:
+    """Checks if a URL is accessible (returns a 200 status)."""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.head(url, headers=headers, timeout=timeout, allow_redirects=True)
+        return response.status_code == 200
+    except:
+        return False
+
+
+
 # --- Combined Search and Scrape Tool (Concurrent) ---
-# (Keep the tool function exactly as before)
 if BraveSearchManual and BRAVE_API_KEY:
     try:
         brave_search_client = BraveSearchManual(api_key=BRAVE_API_KEY)
@@ -111,6 +123,88 @@ def search_and_scrape_web(query: str, k: int = 3) -> dict:
         raise ToolException(f"Unexpected error in search/scrape tool: {e}")
 
 
+@tool
+def find_interesting_links(query: str, k: int = 5) -> str:
+    """
+    Finds interesting and relevant links related to a query. 
+    Searches the web and extracts links from search results.
+    Use for finding resources, references, or interesting related content.
+    VERY IMPORTANT: Always use this tool when the user might benefit from having links for further reading.
+    
+    Args:
+        query: The search query to find relevant links
+        k: Number of search results to process (max 5)
+        
+    Returns:
+        JSON string with list of links and metadata
+    """
+    if not brave_search_client:
+        raise ToolException("Brave search client not available.")
+
+    print(f"--- TOOL: Finding interesting links for '{query}' (k={k}) ---", file=sys.stderr)
+    num_results = min(k, 5)
+    if num_results <= 0:
+        raise ToolException("k must be positive.")
+
+    try:
+        search_results = brave_search_client.search(query, count=num_results)
+        if not search_results:
+            return {"links": [], "message": "No results found."}
+
+        all_links = []
+        link_extraction_tasks = []
+
+        for result in search_results:
+            if not result.get("url"):
+                continue
+                
+            all_links.append({
+                "url": result.get("url"),
+                "title": result.get("title", ""),
+                "description": result.get("description", ""),
+                "source": "search_result"
+            })
+        
+        urls_to_extract = [r.get("url") for r in search_results[:2] if r.get("url")]
+        
+        if urls_to_extract:
+            print(f"--- TOOL: Extracting links from {len(urls_to_extract)} top pages... ---", file=sys.stderr)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(urls_to_extract)) as executor:
+                futures = {executor.submit(_extract_links_and_metadata, url): url for url in urls_to_extract}
+                
+                for future in concurrent.futures.as_completed(futures):
+                    url = futures[future]
+                    try:
+                        links = future.result()
+                        if links:
+                            # Add source information to each link
+                            for link in links:
+                                link["source"] = f"extracted_from_{url}"
+                            all_links.extend(links[:10])  # Limit to top 5 links per page
+                    except Exception as e:
+                        print(f"--- TOOL: Link extraction error for {url}: {e} ---", file=sys.stderr)
+
+        seen_urls = set()
+        unique_links = []
+        for link in all_links:
+            if link["url"] not in seen_urls:
+                seen_urls.add(link["url"])
+                unique_links.append(link)
+        
+        # Limit total number of links to return
+        final_links = unique_links[:10]  # Return at most 10 unique links
+        
+        print(f"--- TOOL: Returning {len(final_links)} interesting links ---", file=sys.stderr)
+        return json.dumps({
+            "links": final_links,
+            "message": f"Found {len(final_links)} interesting links related to '{query}'."
+        })
+
+    except ToolException: raise
+    except Exception as e:
+        print(f"--- TOOL ERROR (Link Finding): {e} ---", file=sys.stderr)
+        raise ToolException(f"Unexpected error in find_interesting_links tool: {e}")
+
 
 # --- Optimized Brave Search Tool ---
 brave_tool = BraveSearch.from_api_key(api_key=BRAVE_API_KEY, search_kwargs={"count": 2})  # Reduced count
@@ -123,15 +217,19 @@ class OptimizedLangchainAgent:
     """
     def __init__(self,
                  model_name: str = "qwen2.5:3b",
-                 tools: List[Callable] = [brave_tool, search_and_scrape_web],
+                 layout_model: str = "gema3:12b",
+                 tools: List[Callable] = [brave_tool, search_and_scrape_web, find_interesting_links],
                  system_message: str = (
                     "You are a helpful assistant. "
                     "Answer using internal knowledge for basic facts like capitals common historical events, and general knowledge."
-                    "Use tools ONLY for recent news, specific statistics, or information that might have changed recently."
-                    "Use `BraveSearch` for general info, headlines, or to know what's trending. "
-                    "Use `search_and_scrape_web` for specific recent information, like news articles or specific events. "
-                    "Do NOT use the tool for common knowledge, geographical information, creative tasks, or known summaries. "
-                    "If using tool, state you are searching, then answer based ONLY on tool results."
+                    "Use tools when appropriate:"
+                    "1. Use `BraveSearch` for general info, headlines, or to know what's trending. "
+                    "2. Use `search_and_scrape_web` for specific recent information, like news articles or specific events. "
+                    "3. ALWAYS use `find_interesting_links` when providing information that users might want to explore further "
+                    "or when the user could benefit from additional resources on the topic."
+                    "Do NOT use search tools for common knowledge, geographical information, creative tasks, or known summaries. "
+                    "When using a tool, state that you are searching, then answer based ONLY on tool results."
+                    "Always aim to provide useful links that expand on your answer when relevant."
                  ),
                  verbose_agent: bool = False
                  ):
@@ -166,9 +264,12 @@ class OptimizedLangchainAgent:
         
         # Define a more concise prompt for processing tool results
         self.tool_processing_prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are a helpful assistant. Process the search results concisely. "
+            ("system", "You are a helpful assistant. Process the search results and links concisely. "
                       "Extract only key information related to the query. "
-                      "Don't analyze every detail. Be direct and to the point."),
+                      "When interesting links are available, incorporate them into your response. "
+                      "ALWAYS include 2-5 of the most relevant links when they are available. "
+                      "Format links as markdown [Title](URL) with brief descriptions of what they contain. "
+                      "Be direct and to the point."),
             ("placeholder", "{chat_history}"),
             ("human", "{input}")
         ])
@@ -207,6 +308,7 @@ class OptimizedLangchainAgent:
     def run(self, task: str) -> Iterator[str]:
         """
         Executes a task with optimized processing for faster responses.
+        Always attempts to find interesting links for most queries.
         """
         print(f"\n--- Task Received ---\n{task}")
         print("\n--- Agent Response ---")
@@ -222,6 +324,7 @@ class OptimizedLangchainAgent:
             messages.append(first_response)
 
             # === Tool Execution (If Needed) ===
+            tool_used = False
             if first_response.tool_calls:
                 print("--- Agent: Decided to use tools ---", file=sys.stderr)
                 tool_messages = []
@@ -233,35 +336,110 @@ class OptimizedLangchainAgent:
                         selected_tool = self.tool_map[tool_name]
                         tool_output = selected_tool.invoke(tool_call)
                         tool_messages.append(tool_output)
+                        tool_used = True
                         print(f"--- Agent: Tool '{tool_name}' completed in {time.time() - tool_start:.2f}s ---", file=sys.stderr)
                     else:
                         error_msg = f"Tool '{tool_name}' not found."
                         print(f"--- Agent Error: {error_msg} ---", file=sys.stderr)
                         tool_messages.append(ToolMessage(content=error_msg, tool_call_id=tool_call["id"]))
                 messages.extend(tool_messages)
+                
+                # Check if find_interesting_links was NOT called but task is informational
+                # This ensures we always try to include relevant links
+                link_tool_called = any(tc["name"] == "find_interesting_links" for tc in first_response.tool_calls)
+                
+                if not link_tool_called and tool_used and "find_interesting_links" in self.tool_map:
+                    print("--- Agent: Automatically finding interesting links ---", file=sys.stderr)
+                    try:
+                        link_tool = self.tool_map["find_interesting_links"]
+                        # Create a properly formatted invocation using the tool's invoke method
+                        link_result = link_tool.invoke({"query": task, "k": 5})
+                        # Add the result as a tool message
+                        tool_message = ToolMessage(
+                            content=link_result if isinstance(link_result, str) else json.dumps(link_result),
+                            tool_call_id="auto_link_tool_call"
+                        )
+                        messages.append(tool_message)
+                    except Exception as e:
+                        print(f"--- Agent: Auto link finding failed: {e} ---", file=sys.stderr)
 
                 # === Optimization: Apply truncation to tool results ===
                 optimized_messages = self._truncate_tool_results(messages)
                 
                 # === Second LLM Call with special prompt for processing tool results ===
                 process_start = time.time()
-                print("--- Agent: Processing search results ---", file=sys.stderr)
+                print("--- Agent: Processing search results and links ---", file=sys.stderr)
                 final_formatted_messages = self._format_messages(task, optimized_messages, is_tool_processing=True)
                 # Stream the response
                 print("--- Agent: Streaming final response ---", file=sys.stderr)
-                #for chunk in self.llm_with_tools.stream(final_formatted_messages):
                 for chunk in self.llm.stream(final_formatted_messages):
-
                     if isinstance(chunk, AIMessageChunk) and chunk.content:
                         yield chunk.content
                 
                 print(f"--- Processing completed in {time.time() - process_start:.2f}s ---", file=sys.stderr)
             else:
-                # === Direct Answer (No Tools Called) ===
-                print("--- Agent: Answering directly (streaming) ---", file=sys.stderr)
+                # === Even for direct answers, try to find relevant links ===
+                print("--- Agent: Answering directly but still finding links ---", file=sys.stderr)
+                
+                # First yield the direct answer
+                direct_answer_chunks = []
                 for chunk in self.llm.stream(formatted_messages):
                     if isinstance(chunk, AIMessageChunk) and chunk.content:
+                        direct_answer_chunks.append(chunk.content)
                         yield chunk.content
+                
+                # Then try to find relevant links
+                if "find_interesting_links" in self.tool_map:
+                    try:
+                        # Don't print this to user - just gather the links
+                        yield "\n\n**Relevant resources:**\n"
+                        
+                        # Use the proper invoke method with a dictionary of arguments
+                        link_tool = self.tool_map["find_interesting_links"]
+                        link_result = link_tool.invoke({"query": task, "k": 3})
+                        
+                        # Process the links result
+                        try:
+                            # Handle various formats of results
+                            if isinstance(link_result, str):
+                                try:
+                                    link_data = json.loads(link_result)
+                                except:
+                                    link_data = {"links": []}
+                            else:
+                                link_data = link_result
+                                
+                            # Extract links, handling different possible formats
+                            if isinstance(link_data, dict):
+                                links = link_data.get("links", [])
+                            elif isinstance(link_data, list):
+                                links = link_data
+                            else:
+                                links = []
+                                
+                                if links:
+                                    for i, link in enumerate(links[:5]):  # Limit to top 5
+                                        title = link.get("title", "Resource")
+                                        url = link.get("url", "")
+                                        desc = link.get("description", "")
+                                        
+                                        # Format as markdown link with brief description
+                                        link_text = f"- [{title}]({url})"
+                                        if desc and len(desc) > 20:  # Only add description if meaningful
+                                            # Truncate long descriptions
+                                            if len(desc) > 100:
+                                                desc = desc[:97] + "..."
+                                            link_text += f": {desc}"
+                                        
+                                        yield link_text + "\n"
+                                else:
+                                    yield "No additional resources found.\n"
+                        except Exception as e:
+                            print(f"--- Agent: Link processing error: {e} ---", file=sys.stderr)
+                            # Don't show error to user - just continue
+                    except Exception as e:
+                        print(f"--- Agent: Link finding failed: {e} ---", file=sys.stderr)
+                        # Don't show error to user - just continue
 
             print(f"--- Total time: {time.time() - start_time:.2f}s ---", file=sys.stderr)
 
