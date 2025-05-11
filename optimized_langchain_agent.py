@@ -55,17 +55,80 @@ def _scrape_and_extract_text(url: str, timeout: int = 10, max_chars: int = 4000)
         return None
 
 
+
 def _extract_links_and_metadata(url: str, timeout: int = 10) -> Optional[List[Dict]]:
-    """Checks if a URL is accessible (returns a 200 status)."""
+    """Extracts links and metadata from a URL, returning a list of dictionaries with link information."""
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
-        response = requests.head(url, headers=headers, timeout=timeout, allow_redirects=True)
-        return response.status_code == 200
-    except:
-        return False
+        response = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+        response.raise_for_status()
+        
+        content_type = response.headers.get('content-type', '').lower()
+        if 'html' not in content_type:
+            return []
 
+        soup = BeautifulSoup(response.content, 'html.parser')
+        extracted_links = []
+        
+        # Find all anchor tags with href attributes
+        for anchor in soup.find_all('a', href=True):
+            href = anchor.get('href', '').strip()
+            
+            # Skip empty links, javascript links, and anchors
+            if not href or href.startswith(('javascript:', '#')):
+                continue
+                
+            # Handle relative URLs
+            if href.startswith('/'):
+                from urllib.parse import urlparse
+                base_url = "{0.scheme}://{0.netloc}".format(urlparse(url))
+                href = base_url + href
+            elif not href.startswith(('http://', 'https://')):
+                # Skip links that aren't http/https and can't be converted to absolute
+                continue
+                
+            # Extract title and description if available
+            title = anchor.get_text(strip=True)
+            title = title if title else "Link from " + url
+            
+            # Get a short description from the parent paragraph or div if available
+            description = ""
+            parent = anchor.find_parent(['p', 'div', 'li'])
+            if parent:
+                description = parent.get_text(strip=True)
+                # Limit description length and remove the link text itself to avoid redundancy
+                if description:
+                    # Remove the link text from description
+                    description = description.replace(title, "", 1).strip()
+                    if len(description) > 200:
+                        description = description[:197] + "..."
+            
+            extracted_links.append({
+                "url": href,
+                "title": title[:100],  # Limit title length
+                "description": description
+            })
+            
+        # Return only unique URLs
+        seen_urls = set()
+        unique_links = []
+        for link in extracted_links:
+            if link["url"] not in seen_urls:
+                seen_urls.add(link["url"])
+                unique_links.append(link)
+        
+        return unique_links[:10]  
+    except requests.exceptions.Timeout:
+        print(f"--- Link Extraction Timeout: {url} ---", file=sys.stderr)
+        return []
+    except requests.exceptions.RequestException as e:
+        print(f"--- Link Extraction RequestException: {url} - {e} ---", file=sys.stderr)
+        return []
+    except Exception as e:
+        print(f"--- Link Extraction Error: {url} - {e} ---", file=sys.stderr)
+        return []
 
 
 # --- Combined Search and Scrape Tool (Concurrent) ---
@@ -78,6 +141,8 @@ if BraveSearchManual and BRAVE_API_KEY:
         brave_search_client = None
 else:
     brave_search_client = None
+
+
 
 @tool
 def search_and_scrape_web(query: str, k: int = 3) -> dict:
@@ -147,6 +212,7 @@ def find_interesting_links(query: str, k: int = 5) -> str:
         raise ToolException("k must be positive.")
 
     try:
+        # First, get search results
         search_results = brave_search_client.search(query, count=num_results)
         if not search_results:
             return {"links": [], "message": "No results found."}
@@ -154,10 +220,12 @@ def find_interesting_links(query: str, k: int = 5) -> str:
         all_links = []
         link_extraction_tasks = []
 
+        # Process direct search results (these are guaranteed to be relevant)
         for result in search_results:
             if not result.get("url"):
                 continue
                 
+            # Add the search result itself as a link
             all_links.append({
                 "url": result.get("url"),
                 "title": result.get("title", ""),
@@ -165,7 +233,8 @@ def find_interesting_links(query: str, k: int = 5) -> str:
                 "source": "search_result"
             })
         
-        urls_to_extract = [r.get("url") for r in search_results[:2] if r.get("url")]
+        # Then extract additional links from the top result pages (for deeper exploration)
+        urls_to_extract = [r.get("url") for r in search_results[:5] if r.get("url")]
         
         if urls_to_extract:
             print(f"--- TOOL: Extracting links from {len(urls_to_extract)} top pages... ---", file=sys.stderr)
@@ -184,6 +253,7 @@ def find_interesting_links(query: str, k: int = 5) -> str:
                     except Exception as e:
                         print(f"--- TOOL: Link extraction error for {url}: {e} ---", file=sys.stderr)
 
+        # Deduplicate links by URL
         seen_urls = set()
         unique_links = []
         for link in all_links:
@@ -207,7 +277,7 @@ def find_interesting_links(query: str, k: int = 5) -> str:
 
 
 # --- Optimized Brave Search Tool ---
-brave_tool = BraveSearch.from_api_key(api_key=BRAVE_API_KEY, search_kwargs={"count": 2})  # Reduced count
+brave_tool = BraveSearch.from_api_key(api_key=BRAVE_API_KEY, search_kwargs={"count": 5})  
 
 
 class OptimizedLangchainAgent:
