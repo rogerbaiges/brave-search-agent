@@ -14,6 +14,8 @@ from config import VERBOSE
 
 from brave_search_api import BraveSearchManual
 
+from playwright.sync_api import sync_playwright, Route, Request
+
 from dotenv import load_dotenv
 import os
 load_dotenv()
@@ -21,9 +23,13 @@ BRAVE_API_KEY = os.getenv("BRAVE_API_KEY")
 
 assert BRAVE_API_KEY, "BRAVE_API_KEY must be set in .env file"
 
+# --- LangChain Brave Search Tool ---
 brave_tool = BraveSearch.from_api_key(api_key=BRAVE_API_KEY, search_kwargs={"count": 5})
 
-# --- Web Scraping Helper ---
+# --- Manual Brave Search Client ---
+brave_search_client = BraveSearchManual(api_key=BRAVE_API_KEY)
+
+# --- Web Scraping Tool ---
 def _scrape_and_extract_text(url: str, timeout: int = 10, max_chars: int = 4000) -> Optional[str]:
     """Fetches and extracts text content from a URL, returning up to max_chars or None."""
     try:
@@ -53,9 +59,6 @@ def _scrape_and_extract_text(url: str, timeout: int = 10, max_chars: int = 4000)
     except Exception as e:
         if VERBOSE: print(f"--- Scraping Error (Parsing/Other): {url} - {e} ---", file=sys.stderr)
         return None
-
-# --- Combined Search and Scrape Tool (Concurrent) ---
-brave_search_client = BraveSearchManual(api_key=BRAVE_API_KEY)
 
 @tool
 def search_and_scrape_web(query: str, k: int = 3) -> dict:
@@ -102,7 +105,7 @@ def search_and_scrape_web(query: str, k: int = 3) -> dict:
         raise ToolException(f"Unexpected error in search/scrape tool: {e}")
     
 
-
+# --- Link Extraction Tool ---
 def _extract_links_and_metadata(url: str, timeout: int = 10) -> Optional[List[Dict]]:
     """Extracts links and metadata from a URL, returning a list of dictionaries with link information."""
     try:
@@ -264,3 +267,109 @@ def find_interesting_links(query: str, k: int = 5) -> str:
     except Exception as e:
         print(f"--- TOOL ERROR (Link Finding): {e} ---", file=sys.stderr)
         raise ToolException(f"Unexpected error in find_interesting_links tool: {e}")
+
+# --- Screenshot Tool ---
+@tool
+def take_screenshot(
+    url: str,
+    output_path: str = "/screenshots/screenshot.png",
+    full_page: bool = False,
+) -> None:
+    """Capture a screenshot of a web page while programmatically hiding most cookie-, banner-,
+    modal-, and CAPTCHA overlays.
+
+    Args:
+        url (str): The URL to visit.
+        output_path (str): File path where the screenshot image will be written.
+        full_page (bool, optional): If ``True`` the entire scrolling page is captured;
+            otherwise only the visible viewport is saved.  Defaults to ``False``.
+
+    Raises:
+        playwright.sync_api.Error: Propagates any unhandled Playwright browser errors.
+
+    Example:
+        >>> take_screenshot("https://example.com", "example.png", full_page=True)
+    """
+    # CSS rules that aggressively hide elements whose id/class names *commonly* appear
+    # in cookie banners, GDPR pop-ups, subscription modals, overlays, and reCAPTCHA iframes.
+    _HIDE_OVERLAYS_CSS = """
+    /* Cookie / consent banners */
+    [id*="cookie" i],
+    [class*="cookie" i],
+    [id*="consent" i],
+    [class*="consent" i],
+    [id*="gdpr" i],
+    [class*="gdpr" i],
+
+    /* Generic banners, overlays, modals, dialogs */
+    [id*="banner" i],
+    [class*="banner" i],
+    [id*="overlay" i],
+    [class*="overlay" i],
+    [id*="modal" i],
+    [class*="modal" i],
+    div[role="dialog"][aria-modal="true"],
+
+    /* “Subscribe to our newsletter”-style pop-ups */
+    [id*="subscribe" i],
+    [class*="subscribe" i],
+
+    /* reCAPTCHA & similar widgets */
+    iframe[src*="recaptcha"],
+    iframe[src*="captcha"],
+    #g-recaptcha,
+    .grecaptcha-badge
+    {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+    }
+    """
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    def _block_captcha(route: Route, request: Request) -> None:  # noqa: D401
+        """Abort obvious CAPTCHA and tracker requests to reduce overlay risk."""
+        url_low = request.url.lower()
+        if "recaptcha" in url_low or "google.com/recaptcha" in url_low:
+            route.abort()
+        else:
+            route.continue_()
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",  # less bot fingerprinting
+            ],
+        )
+
+        # “Stealth” context settings that look like a typical desktop Chrome session
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1366, "height": 768},
+            device_scale_factor=1.0,
+            locale="en-US",
+        )
+
+        # Block the most frequent CAPTCHA network calls
+        context.route("**/*recaptcha*/**", _block_captcha)
+
+        page = context.new_page()
+
+        # Fast but reliable load strategy: DOM content is enough; networkidle is too strict.
+        page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+
+        # Hide overlays before the screenshot is taken
+        page.add_style_tag(content=_HIDE_OVERLAYS_CSS)
+
+        # A short delay ensures the CSS has been applied and late overlays are injected.
+        page.wait_for_timeout(500)
+
+        page.screenshot(path=str(output_path), full_page=full_page)
+
+        browser.close()
