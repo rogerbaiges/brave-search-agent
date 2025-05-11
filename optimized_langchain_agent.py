@@ -48,7 +48,7 @@ class OptimizedLangchainAgent:
 
         try:
             # Initialize LLM with optimized parameters
-            self.llm = ChatOllama(model=model_name, temperature=0)
+            self.llm = ChatOllama(model=model_name, temperature=0.2)
             # Bind tools for easy use later
             self.llm_with_tools = self.llm.bind_tools(self.tools)
             _ = self.llm.invoke("OK")  # Simple connection check
