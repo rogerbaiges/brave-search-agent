@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Too
 from tools import brave_tool, search_and_scrape_web, find_interesting_links
 
 # Model names import
-from config import MAIN_MODEL, LAYOUT_MODEL, VERBOSE
+from config import MAIN_MODEL, VERBOSE
 
 class OptimizedLangchainAgent:
     """
@@ -22,7 +22,6 @@ class OptimizedLangchainAgent:
     """
     def __init__(self,
                  model_name: str = MAIN_MODEL,
-                 layout_model: str = LAYOUT_MODEL,
                  tools: List[Callable] = [brave_tool, search_and_scrape_web, find_interesting_links],
                  system_message: str = (
                     "You are a helpful assistant. "
