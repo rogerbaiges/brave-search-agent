@@ -84,28 +84,28 @@ class OptimizedLangchainAgent:
             prompt_value = self.prompt.invoke({"input": task, "chat_history": history})
         return prompt_value.to_messages()
 
-    def _truncate_tool_results(self, messages: List[BaseMessage]) -> List[BaseMessage]:
-        """Helper to truncate tool results to improve processing speed."""
-        truncated_messages = []
-        for msg in messages:
-            if isinstance(msg, ToolMessage):
-                # Try to extract just the essential information from tool results
-                try:
-                    content = msg.content
-                    # If it's JSON-like and very long, try to extract just key portions
-                    if isinstance(content, str) and len(content) > 1000 and (content.startswith('{') or content.startswith('[')):
-                        # Keep just the beginning portion that likely contains the most relevant info
-                        truncated_content = content[:1000] + "... [truncated for efficiency]"
-                        new_msg = ToolMessage(content=truncated_content, tool_call_id=msg.tool_call_id)
-                        truncated_messages.append(new_msg)
-                    else:
-                        truncated_messages.append(msg)
-                except:
-                    # If any issues, keep original message
-                    truncated_messages.append(msg)
-            else:
-                truncated_messages.append(msg)
-        return truncated_messages
+    # def _truncate_tool_results(self, messages: List[BaseMessage]) -> List[BaseMessage]:
+    #     """Helper to truncate tool results to improve processing speed."""
+    #     truncated_messages = []
+    #     for msg in messages:
+    #         if isinstance(msg, ToolMessage):
+    #             # Try to extract just the essential information from tool results
+    #             try:
+    #                 content = msg.content
+    #                 # If it's JSON-like and very long, try to extract just key portions
+    #                 if isinstance(content, str) and len(content) > 1000 and (content.startswith('{') or content.startswith('[')):
+    #                     # Keep just the beginning portion that likely contains the most relevant info
+    #                     truncated_content = content[:1000] + "... [truncated for efficiency]"
+    #                     new_msg = ToolMessage(content=truncated_content, tool_call_id=msg.tool_call_id)
+    #                     truncated_messages.append(new_msg)
+    #                 else:
+    #                     truncated_messages.append(msg)
+    #             except:
+    #                 # If any issues, keep original message
+    #                 truncated_messages.append(msg)
+    #         else:
+    #             truncated_messages.append(msg)
+    #     return truncated_messages
 
     def run(self, task: str) -> Iterator[str]:
         """
@@ -166,7 +166,8 @@ class OptimizedLangchainAgent:
                         print(f"--- Agent: Auto link finding failed: {e} ---", file=sys.stderr)
 
                 # === Optimization: Apply truncation to tool results ===
-                optimized_messages = self._truncate_tool_results(messages)
+                # optimized_messages = self._truncate_tool_results(messages)
+                optimized_messages = messages
                 
                 # === Second LLM Call with special prompt for processing tool results ===
                 process_start = time.time()
