@@ -9,6 +9,8 @@ from config import VERBOSE
 
 from dotenv import load_dotenv
 
+from langchain_core.tools import ToolException
+
 # --- Load Environment Variables ---
 load_dotenv()
 BRAVE_API_KEY = os.getenv("BRAVE_API_KEY")
