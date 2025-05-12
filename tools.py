@@ -472,7 +472,8 @@ def news_search(query: str, k: int = 5, freshness: Optional[str] = None) -> dict
         raise ToolException("k must be positive.")
 
     try:
-        news_items = _brave_search_client.search_news(query, count=k)
+        news_items = _brave_search_client.search_news(query, count=k, freshness=freshness)
+        _brave_search_client.search_images(query, save_to_dir=IMAGES_DIR, count=k, save_basename=f"news_search_{query}") # Save images to IMAGES_DIR
         return {"news": news_items}
     except ToolException:
         raise
