@@ -4,6 +4,7 @@ from flask_cors import CORS
 import json
 import os
 from optimized_langchain_agent import OptimizedLangchainAgent
+from planner_agent import PlannerAgent
 
 app = Flask(__name__)
 CORS(app)
@@ -15,6 +16,9 @@ global_langchain_agent = OptimizedLangchainAgent(
     verbose_agent=True
 )
 
+# Instancia global del agente de planificación exhaustiva
+planner_agent = PlannerAgent(verbose_agent=True)
+
 @app.route('/search', methods=['POST'])
 def search():
     data = request.get_json()
@@ -22,8 +26,13 @@ def search():
     chat_history = data.get('chat_history', [])
     if not query:
         return jsonify({'error': 'Missing query parameter'}), 400
-    # Prepare the prompt in English, clearly separating history and current prompt
+    from datetime import datetime
+    now = datetime.now()
+    today_str = now.strftime('%A, %d %B %Y')
+    time_str = now.strftime('%H:%M')
+    system_date = f"Today is {today_str}, and the current time is {time_str}."
     prompt = (
+        f"{system_date}\n"
         "Below is the conversation history between a user and an assistant. Use this context to answer coherently and relevantly in the user's language.\n"
         "--- Conversation History ---\n"
     )
@@ -69,6 +78,23 @@ def links():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/plan', methods=['POST'])
+def plan():
+    data = request.get_json()
+    query = data.get('query')
+    chat_history = data.get('chat_history', [])
+    if not query:
+        return jsonify({'error': 'Missing query parameter'}), 400
+    from datetime import datetime
+    today_str = datetime.now().strftime('%A, %d %B %Y')
+    # Inyecta la fecha como primer mensaje del historial
+    system_date_message = {'role': 'system', 'content': f'Today is {today_str}.'}
+    chat_history_with_date = [system_date_message] + chat_history
+    def generate():
+        for token in planner_agent.run(query, chat_history=chat_history_with_date):
+            yield token
+    return Response(generate(), mimetype='text/plain')
+
 @app.route('/images_list')
 def images_list():
     # Devuelve la lista de archivos de la carpeta images
@@ -80,9 +106,19 @@ def images_list():
     images = [f for f in files if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp'))]
     return jsonify({'images': images})
 
-@app.route('/images/<path:filename>')
+@app.route('/images/<path:filename>', methods=['GET', 'DELETE'])
 def serve_image(filename):
     images_dir = os.path.join(os.getcwd(), 'images')
+    file_path = os.path.join(images_dir, filename)
+    if request.method == 'DELETE':
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                return '', 204
+            else:
+                return jsonify({'error': 'File not found'}), 404
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
     return send_from_directory(images_dir, filename)
 
 if __name__ == '__main__':

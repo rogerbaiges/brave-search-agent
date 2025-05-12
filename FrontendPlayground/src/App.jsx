@@ -5,6 +5,7 @@ import { Bot, Send, Paperclip, Plus, Menu } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
+import { Switch } from "@/components/ui/switch"
 
 // Helper function for streaming fetch
 async function callBackendStream({ endpoint, body, onToken }) {
@@ -30,16 +31,30 @@ async function callBackendStream({ endpoint, body, onToken }) {
 }
 
 export default function BravePlayground() {
-  const [messages, setMessages] = useState([
-    { role: 'assistant', content: 'Welcome to the Brave Playground. How can I assist you today?' }
-  ])
+  const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [threadId, setThreadId] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [imagesCleared, setImagesCleared] = useState(false);
+  const [planningEnabled, setPlanningEnabled] = useState(false);
   const messagesEndRef = useRef(null)
 
   useEffect(() => {
+    // Elimina todas las imágenes del backend al cargar la app
+    fetch('http://localhost:5000/images_list')
+      .then(res => res.json())
+      .then(data => {
+        if (data.images && data.images.length) {
+          Promise.all(
+            data.images.map(img =>
+              fetch(`http://localhost:5000/images/${img}`, { method: 'DELETE' })
+            )
+          ).then(() => setImagesCleared(true));
+        } else {
+          setImagesCleared(true);
+        }
+      });
     const setVh = () => {
       const vh = window.innerHeight * 0.01
       document.documentElement.style.setProperty('--vh', `${vh}px`)
@@ -56,6 +71,12 @@ export default function BravePlayground() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  useEffect(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollTop = messagesEndRef.current.scrollHeight;
+    }
+  }, [messages, loading]);
+
   const handleSend = async () => {
     if (input.trim()) {
       setMessages(prev => [...prev, { role: 'user', content: input }])
@@ -69,7 +90,7 @@ export default function BravePlayground() {
       setLoading(true)
       try {
         await callBackendStream({
-          endpoint: 'search',
+          endpoint: planningEnabled ? 'plan' : 'search',
           body: { query: userMessage, chat_history: chatHistory },
           onToken: (token, done) => {
             setMessages(prev => {
@@ -93,7 +114,8 @@ export default function BravePlayground() {
   
   return (
     // Usamos la variable --vh para calcular la altura real del viewport
-    <div style={{ height: "calc(var(--vh, 1vh) * 100)" }} className="flex flex-col md:flex-row bg-gray-900 text-white">
+    <div className="flex flex-col md:flex-row h-[100dvh] bg-gray-900 text-white overflow-y-auto">
+
       {/* Sidebar para escritorio */}
       <div className="hidden md:flex md:flex-col md:w-64 bg-gray-800 p-4 border-r border-gray-600">
         <div className="flex items-center mb-4">
@@ -105,6 +127,15 @@ export default function BravePlayground() {
           <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-orange-500">
             Brave Search
           </h1>
+        </div>
+        {/* Chip de Planning */}
+        <div className="flex items-center mb-4">
+          <button
+            className={`px-3 py-1 rounded-full text-xs font-semibold border transition-colors duration-200 mr-2 ${planningEnabled ? 'bg-orange-500 text-white border-orange-400' : 'bg-gray-700 text-orange-300 border-gray-500 hover:bg-orange-600 hover:text-white'}`}
+            onClick={() => setPlanningEnabled(v => !v)}
+          >
+            {planningEnabled ? 'Planning enabled' : 'Enable planning'}
+          </button>
         </div>
         <div className="flex-1 overflow-auto">
           <h2 className="text-sm font-semibold text-gray-400 mb-3">Recent Conversations</h2>
@@ -129,6 +160,10 @@ export default function BravePlayground() {
         <Button 
           variant="outline" 
           className="mt-4 w-full bg-orange-600 text-gray-300 border-gray-600 hover:bg-gray-700 flex items-center justify-center"
+          onClick={() => {
+            setMessages([]);
+            setInput("");
+          }}
         >
           <Plus className="w-4 h-4 mr-2" />
           New Chat
@@ -172,6 +207,10 @@ export default function BravePlayground() {
             <Button 
               variant="outline" 
               className="mt-4 w-full bg-orange-600 text-gray-300 border-gray-600 hover:bg-gray-700 flex items-center justify-center"
+              onClick={() => {
+                setMessages([]);
+                setInput("");
+              }}
             >
               <Plus className="w-4 h-4 mr-2" />
               New Chat
@@ -205,98 +244,172 @@ export default function BravePlayground() {
           <h1 className="text-xl font-bold">Current Chat</h1>
         </div>
         {/* Contenedor de mensajes: ocupa el espacio restante entre header y footer */}
-        <div className="flex-1 overflow-auto p-4 space-y-4 min-h-0 bg-gray-900">
-          {messages.map((message, index) => {
-            // Oculta el bloque de respuesta vacío si loading está activo y es el último mensaje (asistente)
-            if (
-              loading &&
-              index === messages.length - 1 &&
-              message.role === 'assistant' &&
-              !message.content
-            ) {
-              return null;
-            }
-            // Buscar imágenes generadas para este mensaje (solo para respuestas del asistente)
-            let imageElements = null;
-            if (message.role === 'assistant' && message.content) {
-              // Busca imágenes en la carpeta 'images' modificadas recientemente (opcional: puedes mejorar el criterio)
-              // Aquí asumimos que el backend sirve las imágenes estáticamente desde /images
-              // y que el nombre de la imagen contiene la fecha/hora o un identificador único
-              // Para demo, simplemente mostramos todas las imágenes de la carpeta
-              // En producción, deberías asociar imágenes a mensajes por algún identificador
-              imageElements = (
-                <ImagesForMessage />
-              );
-            }
-            return (
-              <div key={index} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-2xl p-6 mb-2 rounded-lg shadow-lg whitespace-pre-line break-words ${message.role === 'user' ? 'bg-gradient-to-br from-orange-500 to-orange-400 text-white' : 'bg-gray-800 text-orange-100 border border-orange-400'}`}
-                  style={{ margin: '0.5rem' }}
+        <div
+          ref={messagesEndRef}
+          className="flex-1 p-4 space-y-4 min-h-0 bg-gray-900 flex flex-col overflow-y-auto"
+        >
+          {messages.length === 0 ? (
+            <div className="flex flex-1 flex-col items-center justify-center min-h-[60vh]">
+              <img
+                src={"/src/assets/Brave-AI-logo.png"}
+                alt="Brave AI Logo"
+                className="w-32 h-32 mb-8 drop-shadow-lg"
+                style={{ objectFit: 'contain' }}
+              />
+              <div className="text-3xl font-bold text-orange-400 mb-2 text-center">Welcome to Brave Search</div>
+              <div className="text-lg text-orange-100 mb-8 text-center">What do you want to search?</div>
+              <div className="w-full max-w-xl flex items-center rounded-2xl border border-gray-600 bg-gray-900 px-4 py-2 shadow focus-within:ring-2 focus-within:ring-orange-500">
+                <input
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSend();
+                    }
+                  }}
+                  placeholder="Pregunta lo que quieras"
+                  className="flex-1 bg-transparent outline-none text-white placeholder-gray-400 text-base py-2"
+                  style={{ minWidth: 0 }}
+                />
+                <button
+                  className={`ml-2 rounded-full border transition-colors duration-200 flex items-center justify-center ${planningEnabled ? 'bg-orange-500 border-orange-400' : 'bg-gray-700 border-gray-500 hover:bg-orange-600'}`}
+                  onClick={() => setPlanningEnabled(v => !v)}
+                  style={{ minWidth: 44, minHeight: 44, height: 44, width: 44, padding: 0 }}
+                  title={planningEnabled ? 'Planning enabled' : 'Enable planning'}
                 >
-                  {message.role === 'assistant' && (
-                    <Bot className="w-6 h-6 mb-2 text-orange-400" />
-                  )}
-                  {message.role === 'assistant' ? (
-                    <>
-                      <ReactMarkdown 
-                        children={message.content}
-                        remarkPlugins={[remarkGfm]}
-                        rehypePlugins={[rehypeRaw]}
-                        components={{
-                          a: ({node, ...props}) => <a {...props} className="underline text-orange-300 hover:text-orange-500 transition-colors duration-200" target="_blank" rel="noopener noreferrer"/>,
-                          li: ({node, ...props}) => <li {...props} className="mb-2 pl-2 list-disc list-inside"/>,
-                          p: ({node, ...props}) => <p {...props} className="mb-2"/>,
-                          strong: ({node, ...props}) => <strong {...props} className="text-orange-400"/>,
-                          em: ({node, ...props}) => <em {...props} className="italic text-orange-200"/>,
-                          ul: ({node, ...props}) => <ul {...props} className="mb-2 pl-4"/>,
-                          ol: ({node, ...props}) => <ol {...props} className="mb-2 pl-4 list-decimal list-inside"/>,
-                          code: ({node, ...props}) => <code {...props} className="bg-gray-900 text-orange-300 px-1 rounded"/>,
-                        }}
-                      />
-                      {imageElements}
-                    </>
-                  ) : (
-                    typeof message.content === 'string' ? <p>{message.content}</p> : message.content
-                  )}
-                </div>
+                  <img 
+                    src={"/src/assets/planner_logo.png"} 
+                    alt="Planning" 
+                    style={{ 
+                      maxHeight: 32, 
+                      maxWidth: 32, 
+                      width: 'auto', 
+                      height: 'auto', 
+                      display: 'block', 
+                      margin: 'auto', 
+                      filter: planningEnabled ? 'brightness(0) invert(1)' : 'none' 
+                    }} 
+                  />
+                </button>
+                <Button onClick={handleSend} className="ml-2 bg-orange-500 hover:bg-gray-700 text-sm rounded-full p-2">
+                  <Send className="w-5 h-5" />
+                </Button>
               </div>
-            );
-          })}
+            </div>
+          ) : (
+            <>
+              {messages.map((message, index) => {
+                // Oculta el bloque de respuesta vacío si loading está activo y es el último mensaje (asistente)
+                if (
+                  loading &&
+                  index === messages.length - 1 &&
+                  message.role === 'assistant' &&
+                  !message.content
+                ) {
+                  return null;
+                }
+                // Buscar imágenes generadas para este mensaje (solo para respuestas del asistente)
+                let imageElements = null;
+                if (message.role === 'assistant' && message.content) {
+                  // Solo mostrar imágenes si ya se han eliminado las antiguas
+                  imageElements = imagesCleared ? (
+                    <ImagesForMessage />
+                  ) : null;
+                }
+                return (
+                  <div key={index} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-2xl p-6 mb-2 rounded-lg shadow-lg whitespace-pre-line break-words ${message.role === 'user' ? 'bg-gradient-to-br from-orange-500 to-orange-400 text-white' : 'bg-gray-800 text-orange-100 border border-orange-400'}`}
+                      style={{ margin: '0.5rem' }}
+                    >
+                      {message.role === 'assistant' && (
+                        <Bot className="w-6 h-6 mb-2 text-orange-400" />
+                      )}
+                      {message.role === 'assistant' ? (
+                        <>
+                          <ReactMarkdown 
+                            children={message.content}
+                            remarkPlugins={[remarkGfm]}
+                            rehypePlugins={[rehypeRaw]}
+                            components={{
+                              a: ({node, ...props}) => <a {...props} className="underline text-orange-300 hover:text-orange-500 transition-colors duration-200" target="_blank" rel="noopener noreferrer"/>,
+                              li: ({node, ...props}) => <li {...props} className="mb-2 pl-2 list-disc list-inside"/>,
+                              p: ({node, ...props}) => <p {...props} className="mb-2"/>,
+                              strong: ({node, ...props}) => <strong {...props} className="text-orange-400"/>,
+                              em: ({node, ...props}) => <em {...props} className="italic text-orange-200"/>,
+                              ul: ({node, ...props}) => <ul {...props} className="mb-2 pl-4"/>,
+                              ol: ({node, ...props}) => <ol {...props} className="mb-2 pl-4 list-decimal list-inside"/>,
+                              code: ({node, ...props}) => <code {...props} className="bg-gray-900 text-orange-300 px-1 rounded"/>,
+                            }}
+                          />
+                          {imageElements}
+                        </>
+                      ) : (
+                        typeof message.content === 'string' ? <p>{message.content}</p> : message.content
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          )}
           {loading && (
             <div className="flex justify-start">
               <div className="max-w-2xl p-6 mb-2 rounded-lg shadow-lg bg-gray-800 text-orange-100 border border-orange-400 flex items-center space-x-2 animate-pulse">
                 <Bot className="w-6 h-6 mb-2 text-orange-400" />
-                <span className="italic text-orange-300">Thinking...</span>
+                <span className="italic text-orange-300">
+                  {planningEnabled ? 'Thinking...' : 'Searching...'}
+                </span>
               </div>
             </div>
           )}
-          <div ref={messagesEndRef} />
+          {/* Eliminado el ref={messagesEndRef} */}
         </div>
-        {/* Footer con altura fija */}
-          {/* Footer con altura fija y componentes reducidos */}
-          <div className="p-2 bg-gray-800 border-t border-gray-600 flex-shrink-0 h-20">
-            <div className="flex items-center space-x-2">
-              <Button variant="outline" size="icon" className="bg-orange-500 hover:bg-gray-700">
-                <Paperclip className="w-4 h-10" />
-              </Button>
-              <Textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSend();
-                  }
-                }}
-                placeholder="Type your message here..."
-                className="flex-1 bg-gray-700 border-gray-600 focus:ring-orange-500 text-sm p-2"
-              />
-              <Button onClick={handleSend} className="bg-orange-500 hover:bg-gray-700 text-sm">
-                <Send className="w-4 h-5 mr-1" />
-                Send
-              </Button>
+        {/* Footer con diseño moderno tipo Bing/ChatGPT */}
+        <div className={`p-4 bg-gray-800 border-gray-600 flex-shrink-0 flex flex-col items-center transition-all duration-500 ${messages.length === 0 ? 'opacity-0 pointer-events-none translate-y-8' : 'opacity-100 pointer-events-auto translate-y-0'}`}>
+          <div className="w-full max-w-2xl flex flex-col items-center">
+            <div className="w-full flex flex-col items-center">
+              <div className="w-full flex items-center rounded-2xl border border-gray-600 bg-gray-900 px-4 py-2 shadow focus-within:ring-2 focus-within:ring-orange-500">
+                <input
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSend();
+                    }
+                  }}
+                  placeholder="Pregunta lo que quieras"
+                  className="flex-1 bg-transparent outline-none text-white placeholder-gray-400 text-base py-2"
+                  style={{ minWidth: 0 }}
+                />
+                <button
+                  className={`ml-2 rounded-full border transition-colors duration-200 flex items-center justify-center ${planningEnabled ? 'bg-orange-500 border-orange-400' : 'bg-gray-700 border-gray-500 hover:bg-orange-600'}`}
+                  onClick={() => setPlanningEnabled(v => !v)}
+                  style={{ minWidth: 44, minHeight: 44, height: 44, width: 44, padding: 0 }}
+                  title={planningEnabled ? 'Planning enabled' : 'Enable planning'}
+                >
+                  <img 
+                    src={"/src/assets/planner_logo.png"} 
+                    alt="Planning" 
+                    style={{ 
+                      maxHeight: 32, 
+                      maxWidth: 32, 
+                      width: 'auto', 
+                      height: 'auto', 
+                      display: 'block', 
+                      margin: 'auto', 
+                      filter: planningEnabled ? 'brightness(0) invert(1)' : 'none' 
+                    }} 
+                  />
+                </button>
+                <Button onClick={handleSend} className="ml-2 bg-orange-500 hover:bg-gray-700 text-sm rounded-full p-2">
+                  <Send className="w-5 h-5" />
+                </Button>
+              </div>
             </div>
           </div>
+        </div>
       </div>
     </div>
   )
