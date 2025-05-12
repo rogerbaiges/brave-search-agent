@@ -95,7 +95,7 @@ def _scrape_and_extract_text(url: str, timeout: int = 10, max_chars: int = 4000)
         return None
 
 @tool
-def search_web(query: str, k: int = 3) -> dict:
+def extended_web_search(query: str, k: int = 3) -> dict:
     """
     Searches the web using Brave Search API and provides the full content from top 'k' results (max 5).
     This is useful for obtaining full context about something or detailed information on a topic. 

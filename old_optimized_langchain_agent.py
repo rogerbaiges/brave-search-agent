@@ -10,7 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage, BaseMessage
 
 # Tool imports
-from tools import web_search, search_web, find_interesting_links, news_search, image_search
+from tools import web_search, extended_web_search, find_interesting_links, news_search, image_search
 
 # Model names import
 from config import MAIN_MODEL, VERBOSE
@@ -22,7 +22,7 @@ class OptimizedLangchainAgent:
     """
     def __init__(self,
                  model_name: str = MAIN_MODEL,
-                 tools: List[Callable] = [search_web, find_interesting_links, news_search],
+                 tools: List[Callable] = [extended_web_search, find_interesting_links, news_search],
                  system_message: str = (
                     "You are a helpful AI agent that answers the user's questions, has available tools to gather information, and provides links to interesting resources."
                     "Answer using internal knowledge ONLY when the question is about something that is a past event/fact/information that it is IMPOSSIBLE that it has changed since your knowledge cut-off date. If you are unsure, use the tools."
