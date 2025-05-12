@@ -33,13 +33,15 @@ _brave_search_tool = BraveSearch.from_api_key(
 )
 
 @tool
-def quick_web_search(query: str) -> str:
+def web_search(query: str) -> str:
     """
-    A search engine that returns 5 results with a short description of their content.
+    Searches the web using Brave Search API
+    Returns 5 results with a short description of their content.
     Useful for obtaining a short description of a topic or finding relevant content.
 
     Parameters:
         query (str): The search query.
+
     Returns:
         str: JSON string with list of search results.    
     """
@@ -55,7 +57,7 @@ def quick_web_search(query: str) -> str:
             query=query,
             save_to_dir=IMAGES_DIR,
             count=5,
-            save_basename=f"{__name__}_{query}" # brave_search_{query}
+            save_basename=f"web_search_{query}" # brave_search_{query}
         )
     except Exception:
         pass
@@ -93,12 +95,12 @@ def _scrape_and_extract_text(url: str, timeout: int = 10, max_chars: int = 4000)
         return None
 
 @tool
-def full_web_search(query: str, k: int = 3) -> dict:
+def search_web(query: str, k: int = 3) -> dict:
     """
-    Searches web (Brave Search), concurrently scrapes the full content from top 'k' results (max 5).
-    This is useful for obtaining long-form content or detailed information on a topic. 
-    Use it ONLY when you believe that the short description of a web result provided by the basic quick web search tool won't be enough to answer the user's question properly.
-    Use ALWAYS when the already provided content of the web results obtained by the quick search is not enough to directly answer the user's question properly.
+    Searches the web using Brave Search API and provides the full content from top 'k' results (max 5).
+    This is useful for obtaining full context about something or detailed information on a topic. 
+    Use ONLY when you believe that the short description of a web result provided by the basic web search tool won't be enough to answer the user's question properly.
+    Use ALWAYS when the already provided content of the web results obtained by the basic web search is not enough to directly answer the user's question properly.
 
     Parameters:
         query: The search query to find relevant content
@@ -118,7 +120,7 @@ def full_web_search(query: str, k: int = 3) -> dict:
 
     try:
         initial_results = _brave_search_client.search_web(query, count=num_to_scrape)
-        _brave_search_client.search_images(query, save_to_dir=IMAGES_DIR, count=num_to_scrape, save_basename=f"{__name__}_{query}") # Save images to IMAGES_DIR
+        _brave_search_client.search_images(query, save_to_dir=IMAGES_DIR, count=num_to_scrape, save_basename=f"full_web_search_{query}") # Save images to IMAGES_DIR
 
         urls_to_scrape = [r.get("url") for r in initial_results if r.get("url")]
         if not urls_to_scrape: return {"results": []}
@@ -311,7 +313,7 @@ def find_interesting_links(query: str, k: int = 5) -> str:
         raise ToolException(f"Unexpected error in find_interesting_links tool: {e}")
 
 # --- Screenshot Tool ---
-def take_screenshot(
+def web_screenshot(
     url: str,
     output_path: str = "screenshot.png",
     full_page: bool = False,
@@ -415,7 +417,7 @@ def take_screenshot(
 
 # --- Brave Image Search Tool ---
 @tool
-def search_images(query: str, k: int = 5) -> dict:
+def image_search(query: str, k: int = 5) -> dict:
     """
     Search Brave Image API and return up to *k* images.
 
@@ -443,10 +445,10 @@ def search_images(query: str, k: int = 5) -> dict:
 
 # --- Brave News Search Tool ---
 @tool
-def search_news(query: str, k: int = 5, freshness: Optional[str] = None) -> dict:
+def news_search(query: str, k: int = 5, freshness: Optional[str] = None) -> dict:
     """
     Searches Brave News API and returns up to *k* news articles.
-    This tool is useful for finding recent news articles on a specific topic.
+    DO NOT use this tool for regular information that can be easily found with a web search. Instead, use it ONLY for current events or news-related queries.
     Use the ``freshness`` parameter to filter results by time period if this is convenient to properly answer the user's question.
 
     Parameters:

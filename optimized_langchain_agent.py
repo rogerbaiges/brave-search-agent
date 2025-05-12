@@ -10,7 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage, BaseMessage
 
 # Tool imports
-from tools import quick_web_search, full_web_search, find_interesting_links, search_news, search_images
+from tools import web_search, search_web, find_interesting_links, news_search, image_search
 
 # Model names import
 from config import MAIN_MODEL, VERBOSE
@@ -22,10 +22,11 @@ class OptimizedLangchainAgent:
     """
     def __init__(self,
                  model_name: str = MAIN_MODEL,
-                 tools: List[Callable] = [quick_web_search, full_web_search, find_interesting_links, search_news],
+                 tools: List[Callable] = [search_web, find_interesting_links, news_search],
                  system_message: str = (
                     "You are a helpful AI agent that answers the user's questions, has available tools to gather information, and provides links to interesting resources."
                     "Answer using internal knowledge ONLY when the question is about something that is a past event/fact/information that it is IMPOSSIBLE that it has changed since your knowledge cut-off date. If you are unsure, use the tools."
+                    "Pay attention to the specific question that the user is asking, including the time frame associated to it and the specific information that the user is looking for. " "Use the proper tools and arguments to get the specific information that the user is looking for. " 
                     "You can do multiple tool calls in a single response and in multiple responses in order to give the best final answer possible to the user."
                     "Use the tools based on their convenience to the user's question and the description of the tool."
                  ),
@@ -61,7 +62,10 @@ class OptimizedLangchainAgent:
         # Define a more concise prompt for processing tool results
         self.tool_processing_prompt = ChatPromptTemplate.from_messages([
             ("system", "You are a helpful assistant. Process the search results and links concisely to answer the user's question. "
-                      "Extract the key information related to the query. "
+                      "Extract the key information from the previous tools calls and present it to the user. "
+                      "ALWAYS mention the content of the links you are providing in order to answer the user's question, just providing the links is not enough. "
+                      "The links should be only for the user to learn more about the topic, not to answer the question itself. "
+                      "The assistant should answer the question with factual information found or known, not only provide the links for the user to make them find the answer. "
                       "When interesting links are available, incorporate them into your response. "
                       "Format links as markdown [Title](URL) with brief descriptions of what they contain. "
                       "Be direct and to the point."),
@@ -253,38 +257,38 @@ def main():
 
         separator = "\n" + "="*60
 
-        # --- Task 1 ---
-        print(separator)
-        task1 = "What is the capital of Spain?"
-        for token in langchain_agent.run(task1):
-            print(token, end="", flush=True)
-        print()
-        print(separator)
+        # # --- Task 1 ---
+        # print(separator)
+        # task1 = "What is the capital of Spain?"
+        # for token in langchain_agent.run(task1):
+        #     print(token, end="", flush=True)
+        # print()
+        # print(separator)
 
-        # --- Task 2 ---
-        task2 = "What are the latest developments regarding the Artemis program missions?"
-        with open("README.md", "w") as f:
-            f.write("")
-        for token in langchain_agent.run(task2):
-            print(token, end="", flush=True)
-            with open("README.md", "a") as f:
-                f.write(token)
-        print()
-        print(separator)
+        # # --- Task 2 ---
+        # task2 = "What are the latest developments regarding the Artemis program missions?"
+        # with open("README.md", "w") as f:
+        #     f.write("")
+        # for token in langchain_agent.run(task2):
+        #     print(token, end="", flush=True)
+        #     with open("README.md", "a") as f:
+        #         f.write(token)
+        # print()
+        # print(separator)
 
-        # --- Task 4 ---
-        task4 = "Are there any recent news articles discussing the plot or reception of the movie 'Dune: Part Two'?"
-        for token in langchain_agent.run(task4):
-            print(token, end="", flush=True)
-        print()
-        print(separator)
+        # # --- Task 4 ---
+        # task4 = "Are there any recent news articles discussing the plot or reception of the movie 'Dune: Part Two'?"
+        # for token in langchain_agent.run(task4):
+        #     print(token, end="", flush=True)
+        # print()
+        # print(separator)
 
-        # --- Task 5 ---
-        task5 = "Are there any recent news about the pope?"
-        for token in langchain_agent.run(task5):
-            print(token, end="", flush=True)
-        print()
-        print(separator)
+        # # --- Task 5 ---
+        # task5 = "Are there any recent news about the pope?"
+        # for token in langchain_agent.run(task5):
+        #     print(token, end="", flush=True)
+        # print()
+        # print(separator)
 
         # --- Task 6 ---
         task6 = "what is the weather in Barcelona?"
