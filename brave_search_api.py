@@ -195,6 +195,8 @@ class BraveSearchManual:
         
     def _download_img_from_url(self, url: str, save_path: str):
         """Downloads an image from a URL image and saves it to a specified path."""
+        # Create the directory if it doesn't exist
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
         try:
             response = requests.get(url, stream=True)
             response.raise_for_status()
