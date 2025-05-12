@@ -2,6 +2,32 @@ import { useState, useEffect, useRef } from 'react'
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Bot, Send, Paperclip, Plus, Menu } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
+
+// Helper function for streaming fetch
+async function callBackendStream({ endpoint, body, onToken }) {
+  const response = await fetch(`http://localhost:5000/${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.body) return;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let done = false;
+  let buffer = '';
+  while (!done) {
+    const { value, done: doneReading } = await reader.read();
+    done = doneReading;
+    if (value) {
+      buffer += decoder.decode(value, { stream: true });
+      onToken(buffer);
+    }
+  }
+  onToken(buffer, true); // Final call
+}
 
 export default function BravePlayground() {
   const [messages, setMessages] = useState([
@@ -10,11 +36,9 @@ export default function BravePlayground() {
   const [input, setInput] = useState('')
   const [threadId, setThreadId] = useState(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  
-  // Ref para el contenedor de mensajes (auto-scroll)
+  const [loading, setLoading] = useState(false)
   const messagesEndRef = useRef(null)
 
-  // Establecer la variable CSS --vh
   useEffect(() => {
     const setVh = () => {
       const vh = window.innerHeight * 0.01
@@ -25,25 +49,9 @@ export default function BravePlayground() {
     return () => window.removeEventListener('resize', setVh)
   }, [])
 
-  const new_connection = async () => {
-    try {
-      const response = await fetch('http://192.168.86.47:5000/new-conversation', {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-      })
-      const data = await response.json()
-      setThreadId(data.thread_id)
-      console.log("New thread ID:", data.thread_id)
-    } catch (error) {
-      console.error('Failed to start a new conversation:', error)
-    }
-  }
+  // Optionally, you can keep the new_connection logic if you use threads
+  // useEffect(() => { new_connection() }, [])
 
-  useEffect(() => {
-    new_connection()
-  }, [])
-
-  // Auto-scroll al final cuando se actualicen los mensajes
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -53,105 +61,32 @@ export default function BravePlayground() {
       setMessages(prev => [...prev, { role: 'user', content: input }])
       const userMessage = input
       setInput('')
-  
-      console.log("Using thread ID:", threadId)
-  
+      // Add a placeholder for the assistant's streaming response
+      setMessages(prev => [...prev, { role: 'assistant', content: '' }])
+      const assistantIndex = messages.length + 1
+      // Construir el chatHistory para el backend (todos los mensajes previos menos el placeholder)
+      const chatHistory = messages.map(m => ({ role: m.role, content: m.content }))
+      setLoading(true)
       try {
-        // Código real de fetch comentado:
-        // const response = await fetch('http://192.168.86.47:5000/generate', {
-        //   method: 'POST',
-        //   headers: { 'Content-Type': 'application/json' },
-        //   body: JSON.stringify({ prompt: userMessage, thread_id: threadId }),
-        // })
-        // const data = await response.json()
-        // setMessages(prev => [...prev, { role: 'assistant', content: data.response }])
-        
-        // Simulación de respuesta hardcodeada
-        // Simulación de respuesta hardcodeada
-        setMessages(prev => [...prev, { 
-          role: 'assistant', 
-          content: (
-            <div className="space-y-4">
-              <p>
-                Si et trobes a la Facultat d'Informàtica de Barcelona (FIB) i vols menjar fora, aquí tens algunes opcions properes:
-              </p>
-              {/* Nou restaurant inventat */}
-              <div>
-                <strong>Sushi Brave Search</strong>
-                <p className="mt-1">
-                  Situat a només 5 minuts i amb capacitat per a 2 persones.
-                </p>
-                <img
-                  src="https://www.sushifresh.es/blog/wp-content/uploads/2019/06/48179744_23843159724700120_175341253880184832_n-860x860.jpg"
-                  alt="Sushi Brave Search"
-                  className="mt-1 rounded"
-                />
-                <a 
-                  href="https://loyapp.es/comercio/programa-de-fidelizacion-de-bar-de-la-fib/?utm_source=chatgpt.com" 
-                  target="_blank" 
-                  rel="noopener noreferrer" 
-                  className="text-orange-400 underline"
-                >
-                  Veure més
-                </a>
-              </div>
-              
-              <div>
-                <strong>Bar de la FIB</strong>
-                <p className="mt-1">
-                  Situat a l'Edifici B6 del Campus Nord de la UPC, aquest bar universitari ofereix una varietat de plats com hamburgueses, croquetes i butifarras a preus assequibles.
-                </p>
-                <a 
-                  href="https://loyapp.es/comercio/programa-de-fidelizacion-de-bar-de-la-fib/?utm_source=chatgpt.com" 
-                  target="_blank" 
-                  rel="noopener noreferrer" 
-                  className="text-orange-400 underline"
-                >
-                  Veure més
-                </a>
-              </div>
-              <div>
-                <strong>Restaurant Tritón</strong>
-                <p className="mt-1">
-                  Situat al carrer Alfambra 16, a uns 167 metres de la FIB, aquest restaurant combina cuina europea i sushi, oferint una àmplia varietat de plats en un ambient acollidor.
-                </p>
-              </div>
-              <div>
-                <strong>Frankfurt Pedralbes II</strong>
-                <p className="mt-1">
-                  Aquest establiment és conegut pels seus frankfurts i altres plats ràpids, sent una opció popular entre estudiants i locals.
-                </p>
-                <a 
-                  href="https://www.frankfurtpedralbes.com/" 
-                  target="_blank" 
-                  rel="noopener noreferrer" 
-                  className="text-orange-400 underline"
-                >
-                  Veure més
-                </a>
-              </div>
-              <div>
-                <strong>Cafeteria Camins</strong>
-                <p className="mt-1">
-                  Localitzada a l'Edifici B2 del Campus Nord, aquesta cafeteria ofereix serveis de bar i autoservei, sent una alternativa convenient dins del campus.
-                </p>
-                <a 
-                  href="https://www.cafeteriacamins.com/" 
-                  target="_blank" 
-                  rel="noopener noreferrer" 
-                  className="text-orange-400 underline"
-                >
-                  Veure més
-                </a>
-              </div>
-            </div>
-
-          )
-        }])
-
+        await callBackendStream({
+          endpoint: 'search',
+          body: { query: userMessage, chat_history: chatHistory },
+          onToken: (token, done) => {
+            setMessages(prev => {
+              const updated = [...prev]
+              const prevContent = updated[assistantIndex]?.content || ''
+              updated[assistantIndex] = {
+                role: 'assistant',
+                content: prevContent + (token.replace(prevContent, ''))
+              }
+              return updated
+            })
+            if (done) setLoading(false)
+          }
+        })
       } catch (error) {
-        console.error('Error:', error)
-        setMessages(prev => [...prev, { role: 'assistant', content: 'Lo siento, hubo un error procesando tu solicitud.' }])
+        setMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, there was an error.' }])
+        setLoading(false)
       }
     }
   }
@@ -271,16 +206,70 @@ export default function BravePlayground() {
         </div>
         {/* Contenedor de mensajes: ocupa el espacio restante entre header y footer */}
         <div className="flex-1 overflow-auto p-4 space-y-4 min-h-0 bg-gray-900">
-          {messages.map((message, index) => (
-            <div key={index} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-sm p-4 rounded-lg ${message.role === 'user' ? 'bg-orange-500' : 'bg-gray-700'}`}>
-                {message.role === 'assistant' && (
-                  <Bot className="w-6 h-6 mb-2 text-orange-400" />
-                )}
-                {typeof message.content === 'string' ? <p>{message.content}</p> : message.content}
+          {messages.map((message, index) => {
+            // Oculta el bloque de respuesta vacío si loading está activo y es el último mensaje (asistente)
+            if (
+              loading &&
+              index === messages.length - 1 &&
+              message.role === 'assistant' &&
+              !message.content
+            ) {
+              return null;
+            }
+            // Buscar imágenes generadas para este mensaje (solo para respuestas del asistente)
+            let imageElements = null;
+            if (message.role === 'assistant' && message.content) {
+              // Busca imágenes en la carpeta 'images' modificadas recientemente (opcional: puedes mejorar el criterio)
+              // Aquí asumimos que el backend sirve las imágenes estáticamente desde /images
+              // y que el nombre de la imagen contiene la fecha/hora o un identificador único
+              // Para demo, simplemente mostramos todas las imágenes de la carpeta
+              // En producción, deberías asociar imágenes a mensajes por algún identificador
+              imageElements = (
+                <ImagesForMessage />
+              );
+            }
+            return (
+              <div key={index} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-2xl p-6 mb-2 rounded-lg shadow-lg whitespace-pre-line break-words ${message.role === 'user' ? 'bg-gradient-to-br from-orange-500 to-orange-400 text-white' : 'bg-gray-800 text-orange-100 border border-orange-400'}`}
+                  style={{ margin: '0.5rem' }}
+                >
+                  {message.role === 'assistant' && (
+                    <Bot className="w-6 h-6 mb-2 text-orange-400" />
+                  )}
+                  {message.role === 'assistant' ? (
+                    <>
+                      <ReactMarkdown 
+                        children={message.content}
+                        remarkPlugins={[remarkGfm]}
+                        rehypePlugins={[rehypeRaw]}
+                        components={{
+                          a: ({node, ...props}) => <a {...props} className="underline text-orange-300 hover:text-orange-500 transition-colors duration-200" target="_blank" rel="noopener noreferrer"/>,
+                          li: ({node, ...props}) => <li {...props} className="mb-2 pl-2 list-disc list-inside"/>,
+                          p: ({node, ...props}) => <p {...props} className="mb-2"/>,
+                          strong: ({node, ...props}) => <strong {...props} className="text-orange-400"/>,
+                          em: ({node, ...props}) => <em {...props} className="italic text-orange-200"/>,
+                          ul: ({node, ...props}) => <ul {...props} className="mb-2 pl-4"/>,
+                          ol: ({node, ...props}) => <ol {...props} className="mb-2 pl-4 list-decimal list-inside"/>,
+                          code: ({node, ...props}) => <code {...props} className="bg-gray-900 text-orange-300 px-1 rounded"/>,
+                        }}
+                      />
+                      {imageElements}
+                    </>
+                  ) : (
+                    typeof message.content === 'string' ? <p>{message.content}</p> : message.content
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          {loading && (
+            <div className="flex justify-start">
+              <div className="max-w-2xl p-6 mb-2 rounded-lg shadow-lg bg-gray-800 text-orange-100 border border-orange-400 flex items-center space-x-2 animate-pulse">
+                <Bot className="w-6 h-6 mb-2 text-orange-400" />
+                <span className="italic text-orange-300">Thinking...</span>
               </div>
             </div>
-          ))}
+          )}
           <div ref={messagesEndRef} />
         </div>
         {/* Footer con altura fija */}
@@ -293,6 +282,12 @@ export default function BravePlayground() {
               <Textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
                 placeholder="Type your message here..."
                 className="flex-1 bg-gray-700 border-gray-600 focus:ring-orange-500 text-sm p-2"
               />
@@ -305,4 +300,60 @@ export default function BravePlayground() {
       </div>
     </div>
   )
+}
+
+// Componente auxiliar para mostrar imágenes de la carpeta 'images'
+function ImagesForMessage() {
+  const [images, setImages] = useState([]);
+  const [current, setCurrent] = useState(0);
+  useEffect(() => {
+    // Intenta obtener la lista de imágenes del backend (asumiendo que /images está servido como estático)
+    fetch('http://localhost:5000/images_list')
+      .then(res => res.json())
+      .then(data => setImages(data.images || []));
+  }, []);
+  if (!images.length) return null;
+  const prev = () => setCurrent((c) => (c === 0 ? images.length - 1 : c - 1));
+  const next = () => setCurrent((c) => (c === images.length - 1 ? 0 : c + 1));
+  return (
+    <div className="flex flex-col items-center mt-2">
+      <div className="relative">
+        <img
+          src={`http://localhost:5000/images/${images[current]}`}
+          alt="Generated"
+          className="w-80 h-64 object-cover rounded border border-orange-300 shadow"
+          style={{ background: '#222' }}
+        />
+        {images.length > 1 && (
+          <>
+            <button
+              onClick={prev}
+              className="absolute left-0 top-1/2 -translate-y-1/2 bg-gray-900 bg-opacity-60 hover:bg-opacity-90 text-orange-200 px-2 py-1 rounded-l focus:outline-none"
+              style={{ zIndex: 2 }}
+            >
+              &#8592;
+            </button>
+            <button
+              onClick={next}
+              className="absolute right-0 top-1/2 -translate-y-1/2 bg-gray-900 bg-opacity-60 hover:bg-opacity-90 text-orange-200 px-2 py-1 rounded-r focus:outline-none"
+              style={{ zIndex: 2 }}
+            >
+              &#8594;
+            </button>
+          </>
+        )}
+      </div>
+      {images.length > 1 && (
+        <div className="flex gap-1 mt-2">
+          {images.map((_, i) => (
+            <span
+              key={i}
+              className={`w-2 h-2 rounded-full ${i === current ? 'bg-orange-400' : 'bg-gray-500'}`}
+              style={{ display: 'inline-block' }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
