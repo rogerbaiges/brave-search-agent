@@ -10,7 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage, BaseMessage
 
 # Tool imports
-from tools import brave_tool, search_and_scrape_web, find_interesting_links
+from tools import quick_web_search, full_web_search, find_interesting_links, search_news, search_images
 
 # Model names import
 from config import MAIN_MODEL, VERBOSE
@@ -22,18 +22,12 @@ class OptimizedLangchainAgent:
     """
     def __init__(self,
                  model_name: str = MAIN_MODEL,
-                 tools: List[Callable] = [brave_tool, search_and_scrape_web, find_interesting_links],
+                 tools: List[Callable] = [quick_web_search, full_web_search, find_interesting_links, search_news],
                  system_message: str = (
-                    "You are a helpful assistant. "
-                    "Answer using internal knowledge for basic facts like capitals common historical events, and general knowledge."
-                    "Use tools when appropriate:"
-                    "1. Use `BraveSearch` for general info, headlines, or to know what's trending. "
-                    "2. Use `search_and_scrape_web` for specific recent information, like news articles or specific events. "
-                    "3. ALWAYS use `find_interesting_links` when providing information that users might want to explore further "
-                    "or when the user could benefit from additional resources on the topic."
-                    "Do NOT use search tools for common knowledge, geographical information, creative tasks, or known summaries. "
-                    "When using a tool, state that you are searching, then answer based ONLY on tool results."
-                    "Always aim to provide useful links that expand on your answer when relevant."
+                    "You are a helpful AI agent that answers the user's questions, has available tools to gather information, and provides links to interesting resources."
+                    "Answer using internal knowledge ONLY when the question is about something that is a past event/fact/information that it is IMPOSSIBLE that it has changed since your knowledge cut-off date. If you are unsure, use the tools."
+                    "You can do multiple tool calls in a single response and in multiple responses in order to give the best final answer possible to the user."
+                    "Use the tools based on their convenience to the user's question and the description of the tool."
                  ),
                  verbose_agent: bool = VERBOSE,
                 optimizations_enabled: bool = False
@@ -66,10 +60,9 @@ class OptimizedLangchainAgent:
         
         # Define a more concise prompt for processing tool results
         self.tool_processing_prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are a helpful assistant. Process the search results and links concisely. "
-                      "Extract only key information related to the query. "
+            ("system", "You are a helpful assistant. Process the search results and links concisely to answer the user's question. "
+                      "Extract the key information related to the query. "
                       "When interesting links are available, incorporate them into your response. "
-                      "ALWAYS include 2-5 of the most relevant links when they are available. "
                       "Format links as markdown [Title](URL) with brief descriptions of what they contain. "
                       "Be direct and to the point."),
             ("placeholder", "{chat_history}"),
@@ -182,7 +175,7 @@ class OptimizedLangchainAgent:
                     if isinstance(chunk, AIMessageChunk) and chunk.content:
                         yield chunk.content
                 
-                if self.verbose_agent: print(f"--- Processing completed in {time.time() - process_start:.2f}s ---", file=sys.stderr)
+                if self.verbose_agent: print(f"\n--- Processing completed in {time.time() - process_start:.2f}s ---", file=sys.stderr)
             else:
                 # === Even for direct answers, try to find relevant links ===
                 if self.verbose_agent: print("--- Agent: Answering directly but still finding links ---", file=sys.stderr)
@@ -262,29 +255,40 @@ def main():
 
         # --- Task 1 ---
         print(separator)
-        task1 = "What is the capital of France?"
+        task1 = "What is the capital of Spain?"
         for token in langchain_agent.run(task1):
             print(token, end="", flush=True)
         print()
         print(separator)
 
-        # # --- Task 2 ---
+        # --- Task 2 ---
         task2 = "What are the latest developments regarding the Artemis program missions?"
+        with open("README.md", "w") as f:
+            f.write("")
         for token in langchain_agent.run(task2):
             print(token, end="", flush=True)
-        print()
-        print(separator)
-
-        # # --- Task 3 ---
-        task3 = "Write a short haiku about a web scraping robot."
-        for token in langchain_agent.run(task3):
-            print(token, end="", flush=True)
+            with open("README.md", "a") as f:
+                f.write(token)
         print()
         print(separator)
 
         # --- Task 4 ---
         task4 = "Are there any recent news articles discussing the plot or reception of the movie 'Dune: Part Two'?"
         for token in langchain_agent.run(task4):
+            print(token, end="", flush=True)
+        print()
+        print(separator)
+
+        # --- Task 5 ---
+        task5 = "Are there any recent news about the pope?"
+        for token in langchain_agent.run(task5):
+            print(token, end="", flush=True)
+        print()
+        print(separator)
+
+        # --- Task 6 ---
+        task6 = "what is the weather in Barcelona?"
+        for token in langchain_agent.run(task6):
             print(token, end="", flush=True)
         print()
         print(separator)

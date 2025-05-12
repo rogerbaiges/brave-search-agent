@@ -86,6 +86,8 @@ class BraveSearchManual:
     def search_images(
         self,
         query: str,
+        save_to_dir: str | None = None,
+        save_basename: str = "",
         count: int = 5,
         **kwargs,
     ) -> List[Dict[str, Any]]:
@@ -94,6 +96,7 @@ class BraveSearchManual:
         Args:
             query: Search string.
             count: Number of results requested (≤ 20).
+            save_to_dir: Path to save images (if provided).
             **kwargs: Other Brave API parameters (``search_lang``, ``country`` …).
 
         Returns:
@@ -103,6 +106,8 @@ class BraveSearchManual:
         Raises:
             ToolException: On network / API errors.
         """
+        assert save_to_dir if save_basename else True, "save_basename requires save_to_dir"
+
         params = {
             "q": query,
             "count": min(count, 20),
@@ -131,6 +136,14 @@ class BraveSearchManual:
                     }
                 )
             if self.verbose: print(f"--- Brave IMAGE API returned {len(sanitized)} results ---")
+
+            if save_to_dir:
+                for i, r in enumerate(sanitized):
+                    img_url = r.get("image_url")
+                    if img_url:
+                        filename = f"{save_basename if save_basename else 'img'}_{i}.jpg"
+                        file_path = os.path.join(save_to_dir, filename)
+                        self._download_img_from_url(img_url, file_path)
 
             return sanitized
 
@@ -179,3 +192,19 @@ class BraveSearchManual:
 
         except requests.exceptions.RequestException as e:
             raise ToolException(f"Brave News API request failed: {e}") from e
+        
+    def _download_img_from_url(self, url: str, save_path: str):
+        """Downloads an image from a URL image and saves it to a specified path."""
+        try:
+            response = requests.get(url, stream=True)
+            response.raise_for_status()
+            with open(save_path, "wb") as f:
+                for chunk in response.iter_content(1024):
+                    f.write(chunk)
+            if self.verbose: print(f"--- Image saved to {save_path} ---")
+        except requests.exceptions.RequestException as e:
+            print(f"--- Image download failed: {e} ---")
+            raise ToolException(f"Image download failed: {e}")
+        except Exception as e:
+            print(f"--- Unexpected error during image download: {e} ---")
+            raise ToolException(f"Unexpected error during image download: {e}")

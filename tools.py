@@ -10,7 +10,7 @@ from langchain.tools import tool
 from langchain_core.tools import ToolException
 from langchain_community.tools import BraveSearch
 
-from config import VERBOSE
+from config import VERBOSE, IMAGES_DIR, SCREENSHOTS_DIR
 
 from brave_search_api import BraveSearchManual
 
@@ -23,11 +23,43 @@ BRAVE_API_KEY = os.getenv("BRAVE_API_KEY")
 
 assert BRAVE_API_KEY, "BRAVE_API_KEY must be set in .env file"
 
-# --- LangChain Brave Search Tool ---
-brave_tool = BraveSearch.from_api_key(api_key=BRAVE_API_KEY, search_kwargs={"count": 5})
-
 # --- Manual Brave Search Client ---
-brave_search_client = BraveSearchManual(api_key=BRAVE_API_KEY)
+_brave_search_client = BraveSearchManual(api_key=BRAVE_API_KEY)
+
+# --- LangChain Brave Search Tool (with modification to save images) ---
+_brave_search_tool = BraveSearch.from_api_key(
+    api_key=BRAVE_API_KEY,
+    search_kwargs={"count": 5}
+)
+
+@tool
+def quick_web_search(query: str) -> str:
+    """
+    A search engine that returns 5 results with a short description of their content.
+    Useful for obtaining a short description of a topic or finding relevant content.
+
+    Parameters:
+        query (str): The search query.
+    Returns:
+        str: JSON string with list of search results.    
+    """
+    # Original docstring from langchain implementation:
+    # """
+    # a search engine. useful for when you need to answer questions about current events.
+    # input should be a search query.
+    # """
+    result_json = _brave_search_tool.run(query)
+
+    try:
+        _brave_search_client.search_images(
+            query=query,
+            save_to_dir=IMAGES_DIR,
+            count=5,
+            save_basename=f"{__name__}_{query}" # brave_search_{query}
+        )
+    except Exception:
+        pass
+    return result_json
 
 # --- Web Scraping Tool ---
 def _scrape_and_extract_text(url: str, timeout: int = 10, max_chars: int = 4000) -> Optional[str]:
@@ -61,12 +93,21 @@ def _scrape_and_extract_text(url: str, timeout: int = 10, max_chars: int = 4000)
         return None
 
 @tool
-def search_and_scrape_web(query: str, k: int = 3) -> dict:
+def full_web_search(query: str, k: int = 3) -> dict:
     """
-    Searches web (Brave Search), concurrently scrapes content from top 'k' results (max 5).
-    Use ONLY for recent/specific info. Be specific.
+    Searches web (Brave Search), concurrently scrapes the full content from top 'k' results (max 5).
+    This is useful for obtaining long-form content or detailed information on a topic. 
+    Use it ONLY when you believe that the short description of a web result provided by the basic quick web search tool won't be enough to answer the user's question properly.
+    Use ALWAYS when the already provided content of the web results obtained by the quick search is not enough to directly answer the user's question properly.
+
+    Parameters:
+        query: The search query to find relevant content
+        k: Number of search results to scrape (max 5)
+
+    Returns:
+        JSON string with list of scraped results.
     """
-    if not brave_search_client:
+    if not _brave_search_client:
         raise ToolException("Brave search client not available.")
     
 
@@ -76,7 +117,9 @@ def search_and_scrape_web(query: str, k: int = 3) -> dict:
          raise ToolException("k must be positive.")
 
     try:
-        initial_results = brave_search_client.search_web(query, count=num_to_scrape)
+        initial_results = _brave_search_client.search_web(query, count=num_to_scrape)
+        _brave_search_client.search_images(query, save_to_dir=IMAGES_DIR, count=num_to_scrape, save_basename=f"{__name__}_{query}") # Save images to IMAGES_DIR
+
         urls_to_scrape = [r.get("url") for r in initial_results if r.get("url")]
         if not urls_to_scrape: return {"results": []}
 
@@ -189,14 +232,14 @@ def find_interesting_links(query: str, k: int = 5) -> str:
     Use for finding resources, references, or interesting related content.
     VERY IMPORTANT: Always use this tool when the user might benefit from having links for further reading.
     
-    Args:
+    Parameters:
         query: The search query to find relevant links
         k: Number of search results to process (max 5)
         
     Returns:
         JSON string with list of links and metadata
     """
-    if not brave_search_client:
+    if not _brave_search_client:
         raise ToolException("Brave search client not available.")
 
     if VERBOSE: print(f"--- TOOL: Finding interesting links for '{query}' (k={k}) ---", file=sys.stderr)
@@ -206,12 +249,11 @@ def find_interesting_links(query: str, k: int = 5) -> str:
 
     try:
         # First, get search results
-        search_results = brave_search_client.search_web(query, count=num_results)
+        search_results = _brave_search_client.search_web(query, count=num_results)
         if not search_results:
             return {"links": [], "message": "No results found."}
 
         all_links = []
-        link_extraction_tasks = []
 
         # Process direct search results (these are guaranteed to be relevant)
         for result in search_results:
@@ -277,7 +319,7 @@ def take_screenshot(
     """Capture a screenshot of a web page while programmatically hiding most cookie-, banner-,
     modal-, and CAPTCHA overlays.
 
-    Args:
+    Parameters:
         url (str): The URL to visit.
         output_path (str): File path where the screenshot image will be written.
         full_page (bool, optional): If ``True`` the entire scrolling page is captured;
@@ -385,14 +427,14 @@ def search_images(query: str, k: int = 5) -> dict:
         A ``dict`` with key ``images`` containing a list of image-result
         dictionaries ``{title, page_url, image_url, thumbnail_url, source}``.
     """
-    if not brave_search_client:
+    if not _brave_search_client:
         raise ToolException("Brave search client not available.")
 
     if k <= 0:
         raise ToolException("k must be positive.")
 
     try:
-        images = brave_search_client.search_images(query, count=k)
+        images = _brave_search_client.search_images(query, count=k)
         return {"images": images}
     except ToolException:
         raise
@@ -401,25 +443,34 @@ def search_images(query: str, k: int = 5) -> dict:
 
 # --- Brave News Search Tool ---
 @tool
-def search_news(query: str, k: int = 5) -> dict:
+def search_news(query: str, k: int = 5, freshness: Optional[str] = None) -> dict:
     """
     Searches Brave News API and returns up to *k* news articles.
+    This tool is useful for finding recent news articles on a specific topic.
+    Use the ``freshness`` parameter to filter results by time period if this is convenient to properly answer the user's question.
 
-    Args:
-        query: News search query.
-        k: Desired number of articles (max 20).
+    Parameters:
+        query (str): News search query.
+        k (int): Number of news results to return (max 20).
+        freshness (str, optional): Freshness filter for news articles.
+            Options:
+                - "pd": articles from the last day (24 hours)
+                - "pw": articles from the last week (7 days)
+                - "pm": articles from the last month (31 days)
+                - "py": articles from the last year (365 days)
+                - None: articles from any time period (default)
 
     Returns:
-        dict with key ``news`` containing a list of
-        ``{title, url, description, published}`` dictionaries.
+        List of news-result dictionaries with keys:
+            ``title``, ``url``, ``description``
     """
-    if not brave_search_client:
+    if not _brave_search_client:
         raise ToolException("Brave search client not available.")
     if k <= 0:
         raise ToolException("k must be positive.")
 
     try:
-        news_items = brave_search_client.search_news(query, count=k)
+        news_items = _brave_search_client.search_news(query, count=k)
         return {"news": news_items}
     except ToolException:
         raise
