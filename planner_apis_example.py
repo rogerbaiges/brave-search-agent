@@ -94,85 +94,114 @@ def weather_api():
         print("\nFailed to fetch 5-day forecast:", forecast_response.status_code, forecast_response.text)
 
 
+def get_coordinates(location):
+    """If the input is a city name, convert it to coordinates."""
+    if ',' not in location:
+        # Geocode the city name
+        geo_url = f"http://api.openweathermap.org/geo/1.0/direct?q={location}&limit=1&appid={open_weather_api_key}"
+        response = requests.get(geo_url)
+        if response.status_code == 200 and response.json():
+            data = response.json()[0]
+            print(f"→ Found coordinates for {location}: {data['lat']}, {data['lon']}")
+            print([data['lon'], data['lat']])
+            return [data['lon'], data['lat']], location
+        else:
+            print(f"⚠️ Could not find coordinates for {location}. Skipping.")
+    else:
+        try:
+            # Directly parse the coordinates
+            lon, lat = map(float, location.split(','))
+            print(f"→ Using direct coordinates: {lon}, {lat}")
+            print([lat, lon])
+            return [lat, lon], f"{lat},{lon}"
+        except ValueError:
+            print(f"⚠️ Invalid coordinate format: {location}")
+    return None, None
+
 def route_api():
     # === OpenRouteService API ===
     print("\nEnter coordinates (longitude,latitude) or city names for the route. Enter 'done' when finished:")
-
-    def get_coordinates(location):
-        """If the input is a city name, convert it to coordinates."""
-        if ',' not in location:
-            geo_url = f"http://api.openweathermap.org/geo/1.0/direct?q={location}&limit=1&appid={open_weather_api_key}"
-            response = requests.get(geo_url)
-            if response.status_code == 200 and response.json():
-                data = response.json()[0]
-                return [data['lon'], data['lat']]
-        else:
-            try:
-                lon, lat = map(float, location.split(','))
-                return [lon, lat]
-            except ValueError:
-                print(f"Invalid coordinate format: {location}")
-        return None
-
     coordinates = []
+    locations = []
     while True:
         location = input("Location (city or 'lon,lat'): ")
         if location.lower() == 'done':
             break
-        coord = get_coordinates(location)
+        coord, name = get_coordinates(location)
         if coord:
             coordinates.append(coord)
+            locations.append(name)
 
     if len(coordinates) < 2:
         print("\nAt least two points are required to calculate the route.")
-    else:
-        print("\nCalculating the optimal route...")
+        return
 
-        # OpenRouteService request
-        route_url = "https://api.openrouteservice.org/v2/directions/driving-car"
-        headers = {
-            'Authorization': open_route_service_api_key,
-            'Content-Type': 'application/json'
-        }
+    # Profiles for different types of transport
+    profiles = {
+        'driving-car': 'Car',
+        'cycling-regular': 'Cycling',
+        'foot-walking': 'Walking'
+    }
 
-        # Prepare the request body (without roundtrip)
-        body = {
-            'coordinates': coordinates,
-            'instructions': True   # Instrucciones activadas
-        }
+    segment_summaries = []
+    for i in range(len(coordinates) - 1):
+        origin_name = locations[i]
+        dest_name = locations[i + 1]
+        start = coordinates[i]
+        end = coordinates[i + 1]
+        leg = {}
 
-        # Make the API request
-        route_response = requests.post(route_url, headers=headers, data=json.dumps(body))
+        for profile, label in profiles.items():
+            url = f"https://api.openrouteservice.org/v2/directions/{profile}"
+            headers = {
+                'Authorization': open_route_service_api_key,
+                'Content-Type': 'application/json'
+            }
+            body = {
+                'coordinates': [start, end],
+                'instructions': False
+            }
+            resp = requests.post(url, headers=headers, data=json.dumps(body))
+            if resp.status_code == 200:
+                data = resp.json()
+                dist = data['routes'][0]['summary']['distance'] / 1000
+                dur = data['routes'][0]['summary']['duration'] / 60
+                leg[label] = {'distance': dist, 'duration': dur}
+            else:
+                leg[label] = {'distance': None, 'duration': None}
 
-        if route_response.status_code == 200:
-            print("\nOpenRouteService API Test Successful:")
-            route_data = route_response.json()
-            
-            # === Resumen General ===
-            distance = route_data['routes'][0]['summary']['distance'] / 1000
-            duration = route_data['routes'][0]['summary']['duration'] / 60
-            steps = len(route_data['routes'][0]['segments'][0]['steps'])
-            
-            print(f"\n=== Route Summary ===")
-            print(f"Total Distance: {distance:.2f} km")
-            print(f"Estimated Travel Time: {duration:.2f} minutes")
-            print(f"Number of Steps: {steps}")
-            
-            # === Detalle Paso a Paso ===
-            print(f"\n=== Step-by-Step Directions ===")
-            for idx, step in enumerate(route_data['routes'][0]['segments'][0]['steps'], start=1):
-                instruction = step['instruction']
-                step_distance = step['distance'] / 1000
-                step_duration = step['duration'] / 60
-                way_point = step['way_points']
-                print(f"\nStep {idx}:")
-                print(f"  - Instruction: {instruction}")
-                print(f"  - Distance: {step_distance:.2f} km")
-                print(f"  - Estimated Time: {step_duration:.2f} minutes")
-                print(f"  - Way Points: {way_point}")
-
+        # Choose recommended by shortest duration
+        valid_legs = {m: v for m, v in leg.items() if v['duration'] is not None}
+        if valid_legs:
+            rec = min(valid_legs.items(), key=lambda x: x[1]['duration'])[0]
         else:
-            print("\nOpenRouteService API Test Failed:", route_response.status_code, route_response.text)
+            rec = None
+
+        leg['recommended'] = rec
+        segment_summaries.append((origin_name, dest_name, leg))
+
+    # Display summary
+    total_dist = 0.0
+    total_dur = 0.0
+    print("\n=== Route Summary by Segment ===")
+    for idx, (orig, dest, leg) in enumerate(segment_summaries, 1):
+        print(f"\nLeg {idx}: {orig} → {dest}")
+        for mode in ['Car', 'Cycling', 'Walking']:
+            info = leg.get(mode)
+            if info and info['distance'] is not None:
+                print(f"  {mode}: {info['distance']:.2f} km, {info['duration']:.2f} min")
+            else:
+                print(f"  {mode}: not available")
+        rec = leg.get('recommended')
+        if rec:
+            rd = leg[rec]['distance']
+            rt = leg[rec]['duration']
+            print(f"  ⇒ Recommended: {rec} ({rd:.2f} km, {rt:.2f} min)")
+            total_dist += rd
+            total_dur += rt
+
+    print(f"\nTotal Recommended Distance: {total_dist:.2f} km")
+    print(f"Total Recommended Duration: {total_dur:.2f} min")
 
 if __name__ == "__main__":
     print("Welcome to the Weather and Route Planner API Example!")
