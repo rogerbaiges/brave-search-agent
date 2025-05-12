@@ -1,6 +1,6 @@
 import sys
 import traceback
-from typing import List, Callable, Iterator
+from typing import List, Callable, Iterator, Dict, Any
 import time
 import json
 
@@ -8,9 +8,10 @@ import json
 from langchain_ollama.chat_models import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage, BaseMessage
+from langchain_core.tools import BaseTool # Use BaseTool for better type hinting if tools are classes
 
 # Tool imports
-from tools import web_search, search_web, find_interesting_links, news_search, image_search
+from tools import search_web, find_interesting_links, news_search # Ensure these are correctly defined/imported
 
 # Model names import
 from config import MAIN_MODEL, VERBOSE
@@ -18,284 +19,271 @@ from config import MAIN_MODEL, VERBOSE
 class OptimizedLangchainAgent:
     """
     Optimized Agent using Langchain, Ollama, and search tools.
+    Supports iterative tool calls and maintains a clean history.
     Includes performance improvements for faster processing of search results.
     """
     def __init__(self,
                  model_name: str = MAIN_MODEL,
                  tools: List[Callable] = [search_web, find_interesting_links, news_search],
                  system_message: str = (
-                    "You are a helpful AI agent that answers the user's questions, has available tools to gather information, and provides links to interesting resources."
-                    "Answer using internal knowledge ONLY when the question is about something that is a past event/fact/information that it is IMPOSSIBLE that it has changed since your knowledge cut-off date. If you are unsure, use the tools."
-                    "Pay attention to the specific question that the user is asking, including the time frame associated to it and the specific information that the user is looking for. " "Use the proper tools and arguments to get the specific information that the user is looking for. " 
-                    "You can do multiple tool calls in a single response and in multiple responses in order to give the best final answer possible to the user."
-                    "Use the tools based on their convenience to the user's question and the description of the tool."
+                     "You are a helpful AI assistant. Your goal is to answer the user's questions accurately and helpfully. "
+                     "You have access to tools for searching the web, finding news, and discovering relevant links. "
+                     "Use your internal knowledge ONLY for information that is static and cannot have changed since your last training data. "
+                     "For any current events, recent information, or topics where information might change, you MUST use the available tools. "
+                     "Analyze the user's request carefully: identify the core question, any time constraints (e.g., 'latest', 'recent'), and the specific information needed. "
+                     "Choose the most appropriate tool(s) for the task based on their descriptions. "
+                     "You can make multiple tool calls in sequence if needed. If the results from one tool are insufficient, analyze them and decide if another tool call (or the same tool with different arguments) is necessary. "
+                     "After gathering information using tools, synthesize the results clearly and concisely to directly answer the user's question. "
+                     "ALWAYS cite the information source or provide relevant links ([Title](URL)) found by your tools to support your answer and allow the user to explore further. Do not just list links; explain how they are relevant to the answer. "
+                     "Structure your final response to be easily understandable."
                  ),
                  verbose_agent: bool = VERBOSE,
-                optimizations_enabled: bool = False
+                 optimizations_enabled: bool = False,
+                 max_iterations: int = 5 # Add a safety break for tool loops
                  ):
         self.model_name = model_name
-        self.tools = [t for t in tools if callable(t)]
+        self.verbose_agent = verbose_agent
+        self.optimizations_enabled = optimizations_enabled
+        self.max_iterations = max_iterations
+
+        self.tools = tools
         if not self.tools:
             print("Warning: No valid tools provided.", file=sys.stderr)
-        self.verbose_agent = verbose_agent
         self.tool_map = {tool.name: tool for tool in self.tools}
-        self.optimizations_enabled = optimizations_enabled
 
         try:
-            # Initialize LLM with optimized parameters
             self.llm = ChatOllama(model=model_name, temperature=0.2)
-            # Bind tools for easy use later
+            # Bind tools for the LLM to be aware of their schemas
             self.llm_with_tools = self.llm.bind_tools(self.tools)
-            _ = self.llm.invoke("OK")  # Simple connection check
-            if self.verbose_agent: print(f"Successfully connected to Ollama model '{self.model_name}'.")
+            # Simple connection check (optional, but good practice)
+            # self.llm.invoke("Respond with OK")
+            if self.verbose_agent: print(f"Successfully initialized Ollama model '{self.model_name}' with tools: {list(self.tool_map.keys())}.")
         except Exception as e:
-            print(f"Error initializing/connecting to Ollama model '{self.model_name}'. Details: {e}", file=sys.stderr)
+            print(f"Error initializing/connecting to Ollama model '{self.model_name}'. Is Ollama running? Details: {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             sys.exit(1)
 
-        # Define prompt template with more focused instructions
-        self.prompt = ChatPromptTemplate.from_messages([
+        # Define the main prompt template
+        self.prompt_template = ChatPromptTemplate.from_messages([
             ("system", system_message),
             ("placeholder", "{chat_history}"),
-            ("human", "{input}")
-        ])
-        
-        # Define a more concise prompt for processing tool results
-        self.tool_processing_prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are a helpful assistant. Process the search results and links concisely to answer the user's question. "
-                      "Extract the key information from the previous tools calls and present it to the user. "
-                      "ALWAYS mention the content of the links you are providing in order to answer the user's question, just providing the links is not enough. "
-                      "The links should be only for the user to learn more about the topic, not to answer the question itself. "
-                      "The assistant should answer the question with factual information found or known, not only provide the links for the user to make them find the answer. "
-                      "When interesting links are available, incorporate them into your response. "
-                      "Format links as markdown [Title](URL) with brief descriptions of what they contain. "
-                      "Be direct and to the point."),
-            ("placeholder", "{chat_history}"),
-            ("human", "{input}")
+            # Human input is implicitly added last in the messages list
         ])
 
-    def _format_messages(self, task: str, history: List[BaseMessage], is_tool_processing: bool = False) -> List[BaseMessage]:
-        """Helper to format messages for the LLM call with option for different prompts."""
-        if is_tool_processing:
-            prompt_value = self.tool_processing_prompt.invoke({"input": task, "chat_history": history})
-        else:
-            prompt_value = self.prompt.invoke({"input": task, "chat_history": history})
-        return prompt_value.to_messages()
+    def _invoke_tool(self, tool_call: Dict[str, Any]) -> ToolMessage:
+        """Helper function to safely invoke a tool and return a ToolMessage."""
+        tool_name = tool_call.get("name")
+        tool_args = tool_call.get("args", {})
+        tool_call_id = tool_call.get("id") # Crucial for associating result with call
 
-    def _truncate_tool_results(self, messages: List[BaseMessage]) -> List[BaseMessage]:
-        """Helper to truncate tool results to improve processing speed."""
-        truncated_messages = []
-        for msg in messages:
-            if isinstance(msg, ToolMessage):
-                # Try to extract just the essential information from tool results
+        # Ensure tool_call_id is present, generate one if missing (though Langchain usually provides it)
+        if not tool_call_id:
+            tool_call_id = f"tool_call_{time.time_ns()}" # Fallback ID
+            if self.verbose_agent: print(f"--- Agent Warning: Tool call missing ID. Assigning '{tool_call_id}'. Tool call details: {tool_call}", file=sys.stderr)
+
+
+        if not tool_name:
+            return ToolMessage(content="Error: Tool call missing name.", tool_call_id=tool_call_id)
+        if tool_name not in self.tool_map:
+            return ToolMessage(content=f"Error: Tool '{tool_name}' not found.", tool_call_id=tool_call_id)
+
+        selected_tool = self.tool_map[tool_name]
+        tool_start_time = time.time()
+        if self.verbose_agent: print(f"--- Agent: Invoking tool '{tool_name}' with args: {tool_args} (Call ID: {tool_call_id}) ---", file=sys.stderr)
+
+        try:
+            # Langchain tools expect a dictionary 'input' key or handle args directly
+            # We pass the 'args' dictionary from the LLM tool call directly
+            output = selected_tool.invoke(tool_args)
+
+            # Ensure output is string serializable for ToolMessage
+            if not isinstance(output, str):
                 try:
-                    content = msg.content
-                    # If it's JSON-like and very long, try to extract just key portions
-                    if isinstance(content, str) and len(content) > 1000 and (content.startswith('{') or content.startswith('[')):
-                        # Keep just the beginning portion that likely contains the most relevant info
-                        truncated_content = content[:1000] + "... [truncated for efficiency]"
-                        new_msg = ToolMessage(content=truncated_content, tool_call_id=msg.tool_call_id)
-                        truncated_messages.append(new_msg)
+                    # Try pretty printing JSON if it looks like JSON
+                    if isinstance(output, (dict, list)):
+                         output_content = json.dumps(output, indent=2)
                     else:
-                        truncated_messages.append(msg)
-                except:
-                    # If any issues, keep original message
-                    truncated_messages.append(msg)
+                         output_content = json.dumps(output)
+                except TypeError:
+                    output_content = str(output) # Fallback to basic string conversion
             else:
-                truncated_messages.append(msg)
-        return truncated_messages
+                output_content = output
+
+            # --- Optimization: Apply truncation ---
+            if self.optimizations_enabled and len(output_content) > 1500: # Example length threshold
+                output_content = output_content[:1500] + "... [truncated for efficiency]"
+
+            if self.verbose_agent: print(f"--- Agent: Tool '{tool_name}' completed in {time.time() - tool_start_time:.2f}s ---", file=sys.stderr)
+            return ToolMessage(content=output_content, tool_call_id=tool_call_id)
+
+        except Exception as e:
+            error_msg = f"Error executing tool '{tool_name}': {e}"
+            if self.verbose_agent: print(f"--- Agent Error: {error_msg} ---", file=sys.stderr)
+            # It's important to print the traceback for debugging tool errors
+            traceback.print_exc(file=sys.stderr)
+            return ToolMessage(content=error_msg, tool_call_id=tool_call_id)
 
     def run(self, task: str) -> Iterator[str]:
         """
-        Executes a task.
-        Always attempts to find interesting links for most queries.
+        Executes a task, potentially involving multiple tool calls, and streams the final response.
         """
         if self.verbose_agent:
             print(f"\n--- Task Received ---\n{task}")
             print("\n--- Agent Response ---")
         start_time = time.time()
 
-        # Start with just the human input
+        # Initialize chat history with the user's task
         messages: List[BaseMessage] = [HumanMessage(content=task)]
 
         try:
-            # === First LLM Call (Planning/Tool Calling or Direct Answer) ===
-            formatted_messages = self._format_messages(task, [])
-            first_response: AIMessage = self.llm_with_tools.invoke(formatted_messages)
-            messages.append(first_response)
+            for iteration in range(self.max_iterations):
+                if self.verbose_agent: print(f"\n--- Agent Iteration {iteration + 1}/{self.max_iterations} ---", file=sys.stderr)
 
-            # === Tool Execution (If Needed) ===
-            tool_used = False
-            if first_response.tool_calls:
-                if self.verbose_agent: print("--- Agent: Decided to use tools ---", file=sys.stderr)
-                tool_messages = []
-                for tool_call in first_response.tool_calls:
-                    tool_name = tool_call["name"]
-                    tool_start = time.time()
-                    if self.verbose_agent: print(f"--- Agent: Calling tool '{tool_name}' ---", file=sys.stderr)
-                    if tool_name in self.tool_map:
-                        selected_tool = self.tool_map[tool_name]
-                        tool_output = selected_tool.invoke(tool_call)
-                        tool_messages.append(tool_output)
-                        tool_used = True
-                        if self.verbose_agent: print(f"--- Agent: Tool '{tool_name}' completed in {time.time() - tool_start:.2f}s ---", file=sys.stderr)
+                # Prepare messages for the LLM call
+                # Create the prompt value from the template + history *excluding* the last human message
+                prompt_value = self.prompt_template.invoke({"chat_history": messages[:-1]})
+                # Combine the template's output messages (system prompt) with the actual history
+                formatted_messages = prompt_value.to_messages() + messages # Pass the full history
+
+                if self.verbose_agent:
+                    print(f"--- Agent: Calling LLM with {len(formatted_messages)} messages. ---", file=sys.stderr)
+                    # Optional: Log message types for debugging history format
+                    # print(f"--- Message History Types: {[type(m).__name__ for m in formatted_messages]} ---", file=sys.stderr)
+
+
+                # === LLM Call (Streaming) ===
+                stream = self.llm_with_tools.stream(formatted_messages)
+                ai_response_chunks: List[AIMessageChunk] = []
+                full_response_content = "" # Store full text content for potential non-streaming use
+
+                # Consume the stream and collect chunks
+                for chunk in stream:
+                    if isinstance(chunk, AIMessageChunk):
+                        ai_response_chunks.append(chunk)
+                        if chunk.content:
+                            full_response_content += chunk.content # Keep track of text
                     else:
-                        error_msg = f"Tool '{tool_name}' not found."
-                        if self.verbose_agent: print(f"--- Agent Error: {error_msg} ---", file=sys.stderr)
-                        tool_messages.append(ToolMessage(content=error_msg, tool_call_id=tool_call["id"]))
-                messages.extend(tool_messages)
-                
-                # Check if find_interesting_links was NOT called but task is informational
-                # This ensures we always try to include relevant links
-                link_tool_called = any(tc["name"] == "find_interesting_links" for tc in first_response.tool_calls)
-                
-                if not link_tool_called and tool_used and "find_interesting_links" in self.tool_map:
-                    if self.verbose_agent: print("--- Agent: Automatically finding interesting links ---", file=sys.stderr)
-                    try:
-                        link_tool = self.tool_map["find_interesting_links"]
-                        # Create a properly formatted invocation using the tool's invoke method
-                        link_result = link_tool.invoke({"query": task, "k": 5})
-                        # Add the result as a tool message
-                        tool_message = ToolMessage(
-                            content=link_result if isinstance(link_result, str) else json.dumps(link_result),
-                            tool_call_id="auto_link_tool_call"
-                        )
-                        messages.append(tool_message)
-                    except Exception as e:
-                        if self.verbose_agent: print(f"--- Agent: Auto link finding failed: {e} ---", file=sys.stderr)
+                        # Log unexpected chunk types if necessary
+                        if self.verbose_agent: print(f"--- Agent Warning: Received unexpected chunk type: {type(chunk)} ---", file=sys.stderr)
 
-                # === Optimization: Apply truncation to tool results ===
-                if self.optimizations_enabled:
-                    optimized_messages = self._truncate_tool_results(messages)
+
+                # === Reconstruct the full AIMessage ===
+                if not ai_response_chunks:
+                    yield "[Agent Error: LLM response stream was empty or did not contain AI message chunks]"
+                    if self.verbose_agent: print("--- Agent Error: LLM stream yielded no AIMessageChunks. ---", file=sys.stderr)
+                    return # Exit if no valid AI chunks were received
+
+                # Combine chunks using the '+' operator
+                final_ai_message: AIMessageChunk = ai_response_chunks[0]
+                for chunk in ai_response_chunks[1:]:
+                    final_ai_message += chunk
+
+                # Add the reconstructed AI response to history
+                # Although it's technically a chunk, the combined chunk holds all necessary info (content, tool_calls, id)
+                # and behaves like a full AIMessage in the history for the *next* LLM call.
+                messages.append(final_ai_message)
+
+                # === Tool Check and Execution ===
+                # Tool calls are aggregated in the combined chunk
+                tool_calls = final_ai_message.tool_calls
+                if not tool_calls:
+                    if self.verbose_agent: print("--- Agent: LLM decided no tools needed or finished processing. Streaming final answer. ---", file=sys.stderr)
+                    # This is the final answer. Stream its content chunk by chunk as received.
+                    for chunk in ai_response_chunks:
+                        if chunk.content:
+                            yield chunk.content
+                    print() # Add a newline after streaming finishes
+                    break # Exit the loop as we have the final answer
+
                 else:
-                    optimized_messages = messages
-                
-                # === Second LLM Call with special prompt for processing tool results ===
-                process_start = time.time()
-                if self.verbose_agent: print("--- Agent: Processing search results and links ---", file=sys.stderr)
-                final_formatted_messages = self._format_messages(task, optimized_messages, is_tool_processing=True)
-                # Stream the response
-                if self.verbose_agent: print("--- Agent: Streaming final response ---", file=sys.stderr)
-                for chunk in self.llm.stream(final_formatted_messages):
-                    if isinstance(chunk, AIMessageChunk) and chunk.content:
-                        yield chunk.content
-                
-                if self.verbose_agent: print(f"\n--- Processing completed in {time.time() - process_start:.2f}s ---", file=sys.stderr)
-            else:
-                # === Even for direct answers, try to find relevant links ===
-                if self.verbose_agent: print("--- Agent: Answering directly but still finding links ---", file=sys.stderr)
-                
-                # First yield the direct answer
-                direct_answer_chunks = []
-                for chunk in self.llm.stream(formatted_messages):
-                    if isinstance(chunk, AIMessageChunk) and chunk.content:
-                        direct_answer_chunks.append(chunk.content)
-                        yield chunk.content
-                
-                # Then try to find relevant links
-                if "find_interesting_links" in self.tool_map:
-                    try:
-                    
-                        # Use the proper invoke method with a dictionary of arguments
-                        link_tool = self.tool_map["find_interesting_links"]
-                        link_result = link_tool.invoke({"query": task, "k": 3})
-                        
-                        # Process the links result
-                        try:
-                            # Handle various formats of results
-                            if isinstance(link_result, str):
-                                try:
-                                    link_data = json.loads(link_result)
-                                except:
-                                    link_data = {"links": []}
-                            else:
-                                link_data = link_result
-                                
-                            # Extract links, handling different possible formats
-                            if isinstance(link_data, dict):
-                                links = link_data.get("links", [])
-                            elif isinstance(link_data, list):
-                                links = link_data
-                            else:
-                                links = []
-                                
-                            if links:
-                                for i, link in enumerate(links[:5]):  # Limit to top 5
-                                    title = link.get("title", "Resource")
-                                    url = link.get("url", "")
-                                    desc = link.get("description", "")
-                                    
-                                    # Format as markdown link with brief description
-                                    link_text = f"- [{title}]({url})"
-                                    if desc and len(desc) > 20:  # Only add description if meaningful
-                                        # Truncate long descriptions
-                                        if len(desc) > 100:
-                                            desc = desc[:97] + "..."
-                                        link_text += f": {desc}"
-                                    
-                                    yield link_text + "\n"
-                            else:
-                                yield "No additional resources found.\n"
-                        except Exception as e:
-                            if self.verbose_agent: print(f"--- Agent: Link processing error: {e} ---", file=sys.stderr)
-                            # Don't show error to user - just continue
-                    except Exception as e:
-                        if self.verbose_agent: print(f"--- Agent: Link finding failed: {e} ---", file=sys.stderr)
-                        # Don't show error to user - just continue
+                    if self.verbose_agent: print(f"--- Agent: LLM requested {len(tool_calls)} tool(s): {[tc.get('name', 'Unnamed Tool') for tc in tool_calls]} ---", file=sys.stderr)
 
-            if self.verbose_agent: print(f"--- Total time: {time.time() - start_time:.2f}s ---", file=sys.stderr)
+                    tool_messages = []
+                    for tool_call in tool_calls:
+                        # Ensure tool_call has the expected dictionary structure
+                        if isinstance(tool_call, dict) and "name" in tool_call and "args" in tool_call and "id" in tool_call:
+                            tool_result_message = self._invoke_tool(tool_call)
+                            tool_messages.append(tool_result_message)
+                        else:
+                            # Handle malformed tool calls if they occur
+                            error_content = f"Error: Received malformed tool call from LLM: {tool_call}"
+                            if self.verbose_agent: print(f"--- Agent Error: {error_content} ---", file=sys.stderr)
+                            # Try to create a ToolMessage with an error, using a placeholder ID if needed
+                            tc_id = tool_call.get("id", f"malformed_tc_{time.time_ns()}") if isinstance(tool_call, dict) else f"malformed_tc_{time.time_ns()}"
+                            tool_messages.append(ToolMessage(content=error_content, tool_call_id=tc_id))
+
+
+                    # Add tool results to history for the next iteration
+                    messages.extend(tool_messages)
+                    # Continue the loop to let the LLM process the tool results
+
+            else: # Loop finished without break (max_iterations reached)
+                if self.verbose_agent: print(f"--- Agent: Reached max iterations ({self.max_iterations}). Returning current state. ---", file=sys.stderr)
+                # Attempt to stream the last accumulated content, even if tools were pending
+                if full_response_content:
+                    yield full_response_content
+                    yield f"\n[Agent Warning: Reached maximum iterations ({self.max_iterations}). The response might be incomplete or waiting for tool results.]"
+                else:
+                    # If the last AI response had no text content but maybe tool calls
+                    yield f"[Agent Error: Reached maximum iterations ({self.max_iterations}) without a final answer or text response. The last step might have been tool calls.]"
+
+
+            if self.verbose_agent: print(f"\n--- Agent Finished. Total time: {time.time() - start_time:.2f}s ---", file=sys.stderr)
 
         except Exception as e:
-            print(f"\n--- Error during Agent Execution: {e} ---", file=sys.stderr)
+            # Log the specific point of failure if possible
+            print(f"\n--- Error during Agent Execution (in run loop): {e} ---", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
-            yield f"\n[Agent Error: {e}]"
+            yield f"\n[Agent Error: An unexpected error occurred during execution. Details: {e}]"
 
 
 # --- Example Usage ---
 def main():
     try:
-        langchain_agent = OptimizedLangchainAgent(optimizations_enabled=False)
+        langchain_agent = OptimizedLangchainAgent(
+            tools=[search_web, find_interesting_links, news_search],
+            optimizations_enabled=False, # Set to True to test truncation
+            verbose_agent=True # Set to True for detailed logs
+        )
 
         separator = "\n" + "="*60
 
-        # # --- Task 1 ---
+
         # print(separator)
-        # task1 = "What is the capital of Spain?"
+        # task1 = "What is the capital of France?" # Should use internal knowledge
+        # print(f"Running task: {task1}")
         # for token in langchain_agent.run(task1):
         #     print(token, end="", flush=True)
-        # print()
         # print(separator)
 
-        # # --- Task 2 ---
-        # task2 = "What are the latest developments regarding the Artemis program missions?"
-        # with open("README.md", "w") as f:
-        #     f.write("")
+        # print(separator)
+        # task2 = "What are the latest developments regarding the Artemis program missions? Find relevant news and some general info links." # Should use tools
+        # print(f"Running task: {task2}")
         # for token in langchain_agent.run(task2):
         #     print(token, end="", flush=True)
-        #     with open("README.md", "a") as f:
-        #         f.write(token)
-        # print()
         # print(separator)
 
-        # # --- Task 4 ---
-        # task4 = "Are there any recent news articles discussing the plot or reception of the movie 'Dune: Part Two'?"
+        print(separator)
+        task3 = "Are there any recent news articles discussing the plot or reception of the movie 'Dune: Part Two'?" # Should use news_search
+        print(f"Running task: {task3}")
+        for token in langchain_agent.run(task3):
+            print(token, end="", flush=True)
+        print(separator)
+
+        # print(separator)
+        # task4 = "what is the weather like in Barcelona right now?" # Needs a tool
+        # print(f"Running task: {task4}")
         # for token in langchain_agent.run(task4):
         #     print(token, end="", flush=True)
-        # print()
         # print(separator)
 
-        # # --- Task 5 ---
-        # task5 = "Are there any recent news about the pope?"
+        # print(separator)
+        # task5 = "Find recent news about AI regulations in Europe, then find interesting links discussing the potential impact on startups."
+        # print(f"Running task: {task5}")
         # for token in langchain_agent.run(task5):
         #     print(token, end="", flush=True)
-        # print()
         # print(separator)
 
-        # --- Task 6 ---
-        task6 = "what is the weather in Barcelona?"
-        for token in langchain_agent.run(task6):
-            print(token, end="", flush=True)
-        print()
-        print(separator)
 
     except SystemExit:
         print("Exiting due to configuration error.", file=sys.stderr)
@@ -305,3 +293,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
