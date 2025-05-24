@@ -57,6 +57,8 @@ class LayoutChat:
 			"  - Ensuring the output is coherent and flows well.\n"
 			"- If the original content already contains markdown (like links or bold text), preserve and integrate it smoothly into the new layout.\n"
 			"- Respond ONLY with the reformatted content in markdown. Do not include any prefatory remarks, self-correction, or explanation of your process."
+			"- NEVER invent or add any placeholder links to websites or images that were not provided. Only use actual links and images given in the input as long as they are real and not example domains nor placeholders. DO NOT include in your output any links to domains that looks as example placeholder domains (even if they are in the input)."
+			"- If no content images or layout inspiration screenshots are provided, focus solely on enhancing the text content without any visual context."
 		)
 
 	def _encode_image(self, image_input: Union[str, Image.Image]) -> str:

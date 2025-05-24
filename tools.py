@@ -446,7 +446,7 @@ def _get_coordinates_owm(location: str, api_key: Optional[str]) -> Optional[tupl
 @tool
 def weather_search(city: str, num_days: int = 5) -> str:
     """
-    Retrieves the daily weather forecast for a specified city for up to 5 days in the future.
+    Retrieves the daily weather forecast for a specified city for up to 5 days in the future from OpenWeatherMap API (https://openweathermap.org).
     Requires the city name as input and the number of days to forecast (1-5, it should be chosen in accordance with the user's question).
     Provides a daily summary including
     temperature range (min/max Celsius), general weather description, and average wind speed.

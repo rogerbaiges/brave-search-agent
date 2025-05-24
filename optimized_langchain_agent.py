@@ -42,6 +42,7 @@ class OptimizedLangchainAgent:
 					 "After gathering information using tools, synthesize the results clearly and concisely to directly answer the user's question. "
 					 "ALWAYS cite the information source or provide relevant links ([Title](URL)) found by your tools to support your answer and allow the user to explore further. Do not just list links; explain how they are relevant to the answer. "
 					 "Structure your final response to be easily understandable."
+					 "NEVER invent or add any placeholder links to websites nor example domains. Only use actual real links, if available, from the tool results. If you need more links, use the tools provided for that purpose in order to guarantee the links are real and relevant. "
 				 ),
 				 verbose_agent: bool = VERBOSE,
 				 optimizations_enabled: bool = False,
