@@ -40,39 +40,41 @@ def _generate_safe_filename(text: str, max_length: int = 50) -> str:
     return text
 
 @tool
-def general_web_search(query: str) -> str:
+def general_web_search(query: str, freshness: Optional[str] = None) -> str:
     """
-    Searches the web using Brave Search API
+    Searches the web using Brave Search API.
     Returns 5 results with a short description of their content.
     Useful for obtaining a short description of a topic or finding relevant content.
-    Also saves related images to IMAGES_DIR and screenshots of result pages to SCREENSHOTS_DIR.
+    Use the ``freshness`` parameter to filter results by time period if relevant.
+    Also saves related images to IMAGES_DIR and screenshots of result pages to SCREENSHOTS_DIR, respecting freshness.
 
     Parameters:
         query (str): The search query.
+        freshness (str, optional): Freshness filter for search results and images.
+            Options: "pd" (past day), "pw" (past week), "pm" (past month), "py" (past year), None (any time).
 
     Returns:
         str: JSON string with list of search results.
     """
-    if VERBOSE: print(f"--- TOOL: General Web Searching '{query}' ---", file=sys.stderr)
-    num_results = 5 # As per docstring implication (usually 5 for general)
+    if VERBOSE: print(f"--- TOOL: General Web Searching '{query}' (Freshness: {freshness}) ---", file=sys.stderr)
+    num_results = 5
 
     try:
-        # Use the manual client to get structured results directly
-        results_list = _brave_search_client.search_web(query, count=num_results)
+        search_params = {"freshness": freshness} if freshness else {}
+        results_list = _brave_search_client.search_web(query, count=num_results, **search_params)
 
-        # Save related images
         try:
             _brave_search_client.search_images(
                 query=query,
                 save_to_dir=IMAGES_DIR,
                 count=num_results,
-                save_basename=f"web_search_img_{_generate_safe_filename(query)}"
+                save_basename=f"web_search_img_{_generate_safe_filename(query)}",
+                freshness=freshness # Pass freshness to image search
             )
         except Exception as e_img:
             if VERBOSE: print(f"--- Error saving images for general_web_search '{query}': {e_img} ---", file=sys.stderr)
 
-        # Take screenshots of result pages
-        if results_list: # Check if results_list is not empty
+        if results_list:
             os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
             query_slug = _generate_safe_filename(query)
             for i, result in enumerate(results_list):
@@ -86,16 +88,15 @@ def general_web_search(query: str) -> str:
                     except Exception as e_ss:
                         if VERBOSE: print(f"--- Failed to take screenshot for {url}: {e_ss} ---", file=sys.stderr)
         
-        # Return a JSON string of the results_list as per docstring
         return json.dumps(results_list)
 
     except ToolException as e_tool:
         if VERBOSE: print(f"--- Error during general_web_search (Brave API call): {e_tool} ---", file=sys.stderr)
-        return json.dumps({"error": str(e_tool), "results": []}) # Return error in JSON string
+        return json.dumps({"error": str(e_tool), "results": []})
     except Exception as e_main:
         if VERBOSE: print(f"--- Unexpected error in general_web_search '{query}': {e_main} ---", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
-        return json.dumps({"error": f"Unexpected error: {e_main}", "results": []}) # Return error in JSON string
+        return json.dumps({"error": f"Unexpected error: {e_main}", "results": []})
 
 
 def _scrape_and_extract_text(url: str, timeout: int = 10, max_chars: int | None = None) -> Optional[str]:
@@ -128,17 +129,20 @@ def _scrape_and_extract_text(url: str, timeout: int = 10, max_chars: int | None 
         return None
 
 @tool
-def extended_web_search(query: str, k: int = 3) -> dict:
+def extended_web_search(query: str, k: int = 3, freshness: Optional[str] = None) -> dict:
     """
     Searches the web using Brave Search API and provides the full content from top 'k' results (max 5).
     This is useful for obtaining full context about something or detailed information on a topic.
     Use ONLY when you believe that the short description of a web result provided by the basic web search tool won't be enough to answer the user's question properly.
     Use ALWAYS when the already provided content of the web results obtained by the basic web search is not enough to directly answer the user's question properly.
-    Also saves related images to IMAGES_DIR and screenshots of result pages to SCREENSHOTS_DIR.
+    Use the ``freshness`` parameter to filter results by time period if relevant.
+    Also saves related images to IMAGES_DIR and screenshots of result pages to SCREENSHOTS_DIR, respecting freshness.
 
     Parameters:
         query: The search query to find relevant content
         k: Number of search results to scrape (max 5)
+        freshness (str, optional): Freshness filter for search results and images.
+            Options: "pd" (past day), "pw" (past week), "pm" (past month), "py" (past year), None (any time).
 
     Returns:
         dict: Dictionary with list of scraped results under the "results" key.
@@ -146,20 +150,22 @@ def extended_web_search(query: str, k: int = 3) -> dict:
     if not _brave_search_client:
         raise ToolException("Brave search client not available.")
     
-    if VERBOSE: print(f"--- TOOL: Extended Web Searching '{query}' (k={k}) ---", file=sys.stderr)
+    if VERBOSE: print(f"--- TOOL: Extended Web Searching '{query}' (k={k}, Freshness: {freshness}) ---", file=sys.stderr)
     num_to_scrape = min(k, 5)
     if num_to_scrape <= 0:
          raise ToolException("k must be positive.")
 
     try:
-        initial_results = _brave_search_client.search_web(query, count=num_to_scrape)
+        search_params = {"freshness": freshness} if freshness else {}
+        initial_results = _brave_search_client.search_web(query, count=num_to_scrape, **search_params)
         
         try:
             _brave_search_client.search_images(
                 query,
                 save_to_dir=IMAGES_DIR,
                 count=num_to_scrape,
-                save_basename=f"extended_web_search_img_{_generate_safe_filename(query)}"
+                save_basename=f"extended_web_search_img_{_generate_safe_filename(query)}",
+                freshness=freshness # Pass freshness to image search
             )
         except Exception as e_img:
             if VERBOSE: print(f"--- Error saving images for extended_web_search '{query}': {e_img} ---", file=sys.stderr)
@@ -195,13 +201,11 @@ def extended_web_search(query: str, k: int = 3) -> dict:
             for url in urls_to_scrape
         ]
         if VERBOSE: print(f"--- TOOL: Returning {len(final_scraped_results)} results ---", file=sys.stderr)
-        # Return a dictionary as per docstring
         return {"results": final_scraped_results}
 
     except ToolException: raise
     except Exception as e:
         if VERBOSE: print(f"--- TOOL ERROR (Orchestration): {e} ---", file=sys.stderr)
-        # If an unexpected error occurs, return it in a dictionary format consistent with the success case
         return {"error": f"Unexpected error in extended_web_search: {e}", "results": []}
 
 def _extract_links_and_metadata(url: str, timeout: int = 10) -> Optional[List[Dict]]:
@@ -242,27 +246,31 @@ def _extract_links_and_metadata(url: str, timeout: int = 10) -> Optional[List[Di
         if VERBOSE: print(f"--- Link Extraction Error: {url} - {e} ---", file=sys.stderr); return []
 
 @tool
-def find_interesting_links(query: str, k: int = 5) -> str:
+def find_interesting_links(query: str, k: int = 5, freshness: Optional[str] = None) -> str:
     """
     Finds interesting and relevant links related to a query.
-    Searches the web and extracts links from search results.
+    Searches the web and extracts links from search results, optionally filtering by freshness.
     Use for finding resources, references, or interesting related content.
     VERY IMPORTANT: Always use this tool when the user might benefit from having links for further reading.
 
     Parameters:
         query: The search query to find relevant links
         k: Number of search results to process (max 5)
+        freshness (str, optional): Freshness filter for search results.
+            Options: "pd" (past day), "pw" (past week), "pm" (past month), "py" (past year), None (any time).
 
     Returns:
         JSON string with list of links and metadata
     """
     if not _brave_search_client: raise ToolException("Brave search client not available.")
-    if VERBOSE: print(f"--- TOOL: Finding interesting links for '{query}' (k={k}) ---", file=sys.stderr)
+    if VERBOSE: print(f"--- TOOL: Finding interesting links for '{query}' (k={k}, Freshness: {freshness}) ---", file=sys.stderr)
     num_results = min(k, 5)
     if num_results <= 0: raise ToolException("k must be positive.")
     try:
-        search_results = _brave_search_client.search_web(query, count=num_results)
+        search_params = {"freshness": freshness} if freshness else {}
+        search_results = _brave_search_client.search_web(query, count=num_results, **search_params)
         if not search_results: return json.dumps({"links": [], "message": "No results found."})
+        
         all_links = []
         for result in search_results:
             if result.get("url"):
@@ -270,6 +278,7 @@ def find_interesting_links(query: str, k: int = 5) -> str:
                     "url": result.get("url"), "title": result.get("title", ""),
                     "description": result.get("description", ""), "source": "search_result"
                 })
+        
         urls_to_extract = [r.get("url") for r in search_results[:5] if r.get("url")]
         if urls_to_extract:
             if VERBOSE: print(f"--- TOOL: Extracting links from {len(urls_to_extract)} top pages... ---", file=sys.stderr)
@@ -291,7 +300,6 @@ def find_interesting_links(query: str, k: int = 5) -> str:
     except ToolException: raise
     except Exception as e:
         print(f"--- TOOL ERROR (Link Finding): {e} ---", file=sys.stderr)
-        # Return error in JSON string format
         return json.dumps({"error": f"Unexpected error in find_interesting_links: {e}", "links": []})
 
 
@@ -331,18 +339,20 @@ def web_screenshot(
             if VERBOSE: print(f"--- Screenshot saved to {output_path} ---", file=sys.stderr)
     except Exception as e:
         if VERBOSE: print(f"--- Error during web_screenshot for {url}: {e} ---", file=sys.stderr)
-        # Do not raise, let the calling tool handle any critical failure decision.
 
 @tool
-def image_search(query: str, k: int = 5) -> dict:
+def image_search(query: str, k: int = 5, freshness: Optional[str] = None) -> dict:
     """
-    Search Brave Image API and return up to *k* images.
+    Search Brave Image API and return up to *k* images, optionally filtered by freshness.
     This tool is primarily for finding specific images based on a query, not for general page screenshots.
     Images are downloaded to IMAGES_DIR.
 
     Args:
         query: Image search query.
         k: Desired number of image results (max 20).
+        freshness (str, optional): Freshness filter for images.
+            Options: "pd" (past day), "pw" (past week), "pm" (past month), "py" (past year), None (any time).
+
 
     Returns:
         A ``dict`` with key ``images`` containing a list of image-result
@@ -353,14 +363,13 @@ def image_search(query: str, k: int = 5) -> dict:
     try:
         images = _brave_search_client.search_images(
             query, save_to_dir=IMAGES_DIR,
-            save_basename=f"image_search_{_generate_safe_filename(query)}", count=k
+            save_basename=f"image_search_{_generate_safe_filename(query)}", count=k,
+            freshness=freshness # Pass freshness to image search
         )
         return {"images": images}
     except ToolException: raise
     except Exception as e:
-        # Return error in dict format consistent with success case
         return {"error": f"Unexpected error in image_search: {e}", "images": []}
-
 
 @tool
 def news_search(query: str, k: int = 5, freshness: Optional[str] = None) -> dict:
@@ -368,18 +377,13 @@ def news_search(query: str, k: int = 5, freshness: Optional[str] = None) -> dict
     Searches Brave News API and returns up to *k* news articles.
     DO NOT use this tool for regular information that can be easily found with a web search. Instead, use it ONLY for current events or news-related queries.
     Use the ``freshness`` parameter to filter results by time period if this is convenient to properly answer the user's question.
-    Also saves related images to IMAGES_DIR.
+    Also saves related images to IMAGES_DIR, respecting freshness.
 
     Parameters:
         query (str): News search query.
         k (int): Number of news results to return (max 20).
-        freshness (str, optional): Freshness filter for news articles.
-            Options:
-                - "pd": articles from the last day (24 hours).
-                - "pw": articles from the last week (7 days).
-                - "pm": articles from the last month (31 days).
-                - "py": articles from the last year (365 days).
-                - None: articles from any time period.
+        freshness (str, optional): Freshness filter for news articles and related images.
+            Options: "pd" (past day), "pw" (past week), "pm" (past month), "py" (past year), None (any time).
 
     Returns:
         dict: Dictionary with list of news-result dictionaries under the "news" key.
@@ -387,15 +391,17 @@ def news_search(query: str, k: int = 5, freshness: Optional[str] = None) -> dict
     if not _brave_search_client: raise ToolException("Brave search client not available.")
     if k <= 0: raise ToolException("k must be positive.")
     try:
-        news_items = _brave_search_client.search_news(query, count=k, freshness=freshness)
+        search_params = {"freshness": freshness} if freshness else {}
+        news_items = _brave_search_client.search_news(query, count=k, **search_params)
+        
         _brave_search_client.search_images(
             query, save_to_dir=IMAGES_DIR, count=k,
-            save_basename=f"news_search_img_{_generate_safe_filename(query)}"
+            save_basename=f"news_search_img_{_generate_safe_filename(query)}",
+            freshness=freshness # Pass freshness to image search
         )
-        return {"news": news_items} # Return dict as per docstring
+        return {"news": news_items}
     except ToolException: raise
     except Exception as e:
-        # Return error in dict format consistent with success case
         return {"error": f"Unexpected error in news_search: {e}", "news": []}
 
 
@@ -430,7 +436,7 @@ def _get_coordinates_owm(location: str, api_key: Optional[str]) -> Optional[tupl
     geo_url = f"http://api.openweathermap.org/geo/1.0/direct?q={location.strip()}&limit=1&appid={api_key}"
     try:
         response = requests.get(geo_url, timeout=10); response.raise_for_status(); data = response.json()
-        if data and isinstance(data, list) and data[0].get('lat') is not None and data[0].get('lon') is not None:
+        if data and isinstance(data, list) and len(data) > 0 and data[0].get('lat') is not None and data[0].get('lon') is not None:
             lat, lon = data[0]['lat'], data[0]['lon']
             if VERBOSE: print(f"--- OWM Helper: Geocoded '{location}' to ({lat}, {lon}) ---", file=sys.stderr)
             return lat, lon
