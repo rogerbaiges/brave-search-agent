@@ -10,7 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage, BaseMessage
 
 # Tool imports
-from tools import web_search, extended_web_search, find_interesting_links, news_search, image_search
+from tools import general_web_search, extended_web_search, find_interesting_links, news_search, image_search
 
 # Model names import
 from config import MAIN_MODEL, VERBOSE
