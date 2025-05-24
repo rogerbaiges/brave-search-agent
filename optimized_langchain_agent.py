@@ -73,7 +73,7 @@ class OptimizedLangchainAgent:
 			self.llm_with_tools = self.llm.bind_tools(self.tools)
 			if self.verbose_agent: print(f"Successfully initialized Ollama model '{self.model_name}' with tools: {list(self.tool_map.keys())}.")
 		except Exception as e:
-			print(f"Error initializing/connecting to Ollama model '{self.model_name}'. Is Ollama running? Details: {e}", file=sys.stderr)
+			print(f"Error initializing/connecting to Ollama model '{model_name}'. Is Ollama running? Details: {e}", file=sys.stderr)
 			traceback.print_exc(file=sys.stderr)
 			sys.exit(1)
 
@@ -88,7 +88,7 @@ class OptimizedLangchainAgent:
 		tool_call_id = tool_call.get("id")
 
 		if not tool_call_id:
-			tool_call_id = f"tool_call_{time.time_ns()}"
+			tool_call_id = f"tool_call_{time.time()}_id_{os.urandom(4).hex()}" # More robust ID
 			if self.verbose_agent: print(f"--- Agent Warning: Tool call missing ID. Assigning '{tool_call_id}'. Tool call details: {tool_call}", file=sys.stderr)
 
 		if not tool_name:
@@ -102,19 +102,26 @@ class OptimizedLangchainAgent:
 
 		try:
 			output = selected_tool.invoke(tool_args)
+			# Ensure output is a string for ToolMessage content
 			if not isinstance(output, str):
 				try:
 					if isinstance(output, (dict, list)):
+						# Convert dicts/lists to JSON string for clarity in ToolMessage content
 						output_content = json.dumps(output, indent=2)
 					else:
-						output_content = json.dumps(output)
+						output_content = str(output)
 				except TypeError:
+					# Fallback for objects that cannot be json.dumps
 					output_content = str(output)
 			else:
 				output_content = output
 
+			# Truncate large outputs for efficiency, only if optimizations_enabled is True
 			if self.optimizations_enabled and len(output_content) > 1500:
-				output_content = output_content[:1500] + "... [truncated for efficiency]"
+				original_len = len(output_content)
+				output_content = output_content[:1500] + f"... [truncated from {original_len} chars for efficiency]"
+				if self.verbose_agent: print(f"--- Agent: Truncated tool output from {original_len} to 1500 chars. ---", file=sys.stderr)
+
 
 			if self.verbose_agent: print(f"--- Agent: Tool '{tool_name}' completed in {time.time() - tool_start_time:.2f}s ---", file=sys.stderr)
 			return ToolMessage(content=output_content, tool_call_id=tool_call_id)
@@ -201,12 +208,15 @@ class OptimizedLangchainAgent:
 					if self.verbose_agent: print(f"--- Agent: LLM requested {len(tool_calls)} tool(s): {[tc.get('name', 'Unnamed Tool') for tc in tool_calls]} ---", file=sys.stderr)
 					tool_messages = []
 					for tool_call in tool_calls:
+						# IMPORTANT: Ensure tool_call has 'id' for ToolMessage. Langchain guarantees this for _tool_calls but direct access might not.
+						# A simple check: if 'id' is missing, generate one.
 						if isinstance(tool_call, dict) and "name" in tool_call and "args" in tool_call and "id" in tool_call:
 							tool_result_message = self._invoke_tool(tool_call)
 							tool_messages.append(tool_result_message)
 						else:
 							error_content = f"Error: Received malformed tool call from LLM: {tool_call}"
 							if self.verbose_agent: print(f"--- Agent Error: {error_content} ---", file=sys.stderr)
+							# Create a tool message with a generated ID if the original was malformed
 							tc_id = tool_call.get("id", f"malformed_tc_{time.time_ns()}") if isinstance(tool_call, dict) else f"malformed_tc_{time.time_ns()}"
 							tool_messages.append(ToolMessage(content=error_content, tool_call_id=tc_id))
 					messages.extend(tool_messages)
@@ -248,6 +258,7 @@ class OptimizedLangchainAgent:
 
 	def run_layout(self,
 				   task: str,
+				   user_original_query: str, # Add this parameter
 				   empty_data_folders: bool = True,
 				   data_folders: list[str] = [IMAGES_DIR, SCREENSHOTS_DIR],
 				   layout_inspiration_image_paths: Optional[List[str]] = None,
@@ -255,6 +266,7 @@ class OptimizedLangchainAgent:
 				   ) -> Iterator[str]:
 		if self.verbose_agent:
 			print(f"\n--- Task Received for Run with Layout ---\n{task}")
+			print(f"--- Original User Query: {user_original_query} ---") # Log for clarity
 			if layout_inspiration_image_paths:
 				print(f"--- Layout Inspiration Images Parameter: {layout_inspiration_image_paths} ---")
 			print(f"--- Data folders for self.run: {data_folders}, Empty them: {empty_data_folders} ---")
@@ -346,6 +358,7 @@ class OptimizedLangchainAgent:
 			if self.verbose_agent: print("--- Calling LayoutChat.run() for final formatted response ---", file=sys.stderr)
 			for chunk in layout_chat_instance.run(
 				agent_output_str=agent_output_str,
+				user_original_query=user_original_query, # Pass the original query here
 				content_images=newly_generated_content_images,
 				layout_inspiration_screenshots=final_layout_inspiration_images
 			):
@@ -409,10 +422,7 @@ def main():
 		print(separator)
 		print("TEST 1: empty_data_folders=True, no explicit inspiration_paths (should use new screenshots from SCREENSHOTS_DIR if any)")
 		task_for_layout_1 = "What are the latest developments regarding the Artemis program missions? Find relevant news and save some images."
-		# Tools should save to IMAGES_DIR and SCREENSHOTS_DIR (e.g. news_search saves to IMAGES_DIR, imagine a screenshot tool saves to SCREENSHOTS_DIR)
-		# For this test, we'll manually add a "new" screenshot after run() would normally execute its tools.
-		# This simulates a tool creating a screenshot.
-		# We expect this to be picked up if layout_inspiration_image_paths is None.
+		user_original_query_1 = "Artemis program updates" # Original query for LayoutChat context
 		
 		# Manually ensure dummy_inspiration_path is "new" if empty_data_folders=True
 		# by deleting it if it exists from a previous run, so it can be "re-created"
@@ -435,6 +445,7 @@ def main():
 		print(f"Running task (layout test 1): {task_for_layout_1}")
 		for token in langchain_agent.run_layout(
 			task_for_layout_1,
+			user_original_query=user_original_query_1, # Pass here
 			empty_data_folders=True, # Will clear IMAGES_DIR and SCREENSHOTS_DIR
 			layout_inspiration_image_paths=None # Rely on new files in SCREENSHOTS_DIR
 		):
@@ -450,6 +461,7 @@ def main():
 		print(separator)
 		print("TEST 2: empty_data_folders=False, explicit inspiration_paths")
 		task_for_layout_2 = "Tell me about the Perseverance rover on Mars. Find general info and images."
+		user_original_query_2 = "Perseverance rover details" # Original query for LayoutChat context
 
 		output_file = "output_layout_2.html"
 		with open(output_file, "w", encoding="utf-8") as f:
@@ -475,6 +487,7 @@ def main():
 		print(f"Running task (layout test 2): {task_for_layout_2}")
 		for token in langchain_agent.run_layout(
 			task_for_layout_2,
+			user_original_query=user_original_query_2, # Pass here
 			empty_data_folders=False, # Should preserve content_image_before.png
 			layout_inspiration_image_paths=explicit_inspiration
 		):

@@ -3,12 +3,8 @@ import json
 import traceback
 import requests
 import sys
-from typing import List, Dict, Any, Optional # Added Optional
-import shutil # For renaming/moving files if needed
-from pathlib import Path
-from bs4 import BeautifulSoup
-import time
-import random
+from typing import List, Dict, Any
+
 
 
 from config import VERBOSE
@@ -41,8 +37,6 @@ class BraveSearchManual:
 	BASE_VIDEOS_URL = "https://api.search.brave.com/res/v1/videos/search"
 
 	def __init__(self, api_key: str, verbose: bool = VERBOSE):
-		if not api_key and gid is None: # Require Brave key if Google Images isn't an option for images
-			raise ValueError("Brave API key is required (or google_images_download must be installed and functional).")
 		self.verbose = verbose
 		self.api_key = api_key # Still keep for Brave parts
 		self.headers = {
@@ -51,11 +45,6 @@ class BraveSearchManual:
 			"X-Subscription-Token": self.api_key,
 			"X-Loc-State": "ES",
 		}
-		# Initialize Google Images downloader object if library is available
-		if gid:
-			self.google_image_downloader = gid.googleimagesdownload()
-		else:
-			self.google_image_downloader = None
 
 	def search_web(self, query: str, count: int = 5, **kwargs) -> List[Dict[str, Any]]:
 		"""

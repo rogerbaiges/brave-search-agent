@@ -44,7 +44,8 @@ def search():
 			   "Now, this is the user prompt.\n"
 			   f"User: {query}\n")
 	def generate():
-		for token in global_langchain_agent.run_layout(prompt):
+		# Pass the original 'query' to run_layout
+		for token in global_langchain_agent.run_layout(prompt, user_original_query=query, empty_data_folders=False):
 			yield token
 	return Response(generate(), mimetype='text/plain')
 

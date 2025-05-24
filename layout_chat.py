@@ -28,7 +28,7 @@ class LayoutChat:
 		):
 		self.layout_model_name = layout_model_name
 		self.verbose = verbose
-		self.chat_history: List[BaseMessage] = [] # Stores conversation history for LayoutChat
+		# self.chat_history: List[BaseMessage] = [] # REMOVED: No longer needed as history is passed via agent_output_str and user_original_query
 
 		try:
 			self.llm = ChatOllama(model=self.layout_model_name, temperature=0.2)
@@ -68,6 +68,7 @@ class LayoutChat:
 				"5.  **Image Integration (If 'Content Images' are provided):**\n"
 				"    - Reference images with `<figure>` and `<figcaption>`: e.g., `<figure><img src=\"...\" alt=\"...\"><figcaption>As seen in Content Image X, ...</figcaption></figure>`.\n"
 				"    - Do NOT invent image content. Only refer to what can be inferred from the provided images.\n"
+				"    - **Crucially, analyze the content of the provided 'Content Images' and integrate them coherently and semantically where they add the most value to the 'Main Content'. Choose only the most relevant images to display if many are provided.**\n"
 				"6.  **Layout Inspiration (If 'Layout Inspiration Screenshots' are provided):**\n"
 				"    - Observe structure, whitespace, typography scale, and layout patterns in the screenshots.\n"
 				"    - Apply similar HTML structure and class naming conventions for visual consistency, without copying any text from the inspiration.\n"
@@ -92,6 +93,7 @@ class LayoutChat:
 				"4.  **Image Integration (If 'Content Images' are provided):**\n"
 				"    *   Weave descriptions or references to the 'Content Images' into the text where they are most relevant. You might say, 'As seen in the provided image of [subject]...' or 'The chart (see Content Image X) illustrates...'.\n"
 				"    *   Do NOT invent image content. Only refer to what can be inferred from the fact that images were provided.\n"
+				"    *   **Crucially, analyze the content of the provided 'Content Images' and integrate them coherently and semantically where they add the most value to the 'Main Content'. Choose only the most relevant images to display if many are provided.**\n"
 				"5.  **Layout Inspiration (If 'Layout Inspiration Screenshots' are provided):**\n"
 				"    *   Observe the style of headings, list formatting, use of whitespace, and overall structure in these screenshots.\n"
 				"    *   Apply similar stylistic elements to your markdown output. DO NOT replicate the text content from these inspiration images; they are for visual/structural guidance only.\n"
@@ -156,6 +158,7 @@ class LayoutChat:
 
 	def run(self,
 			agent_output_str: str,
+			user_original_query: str, # Add this parameter
 			content_images: List[Union[str, Image.Image]] = None,
 			layout_inspiration_screenshots: List[Union[str, Image.Image]] = None
 			) -> Iterator[str]:
@@ -166,6 +169,7 @@ class LayoutChat:
 
 		Args:
 			agent_output_str: The string output from a previous agent/model.
+			user_original_query: The user's original query for context.
 			content_images: A list of image file paths or PIL Image objects directly related to the content.
 			layout_inspiration_screenshots: A list of image file paths or PIL Image objects for layout style guidance.
 
@@ -174,6 +178,7 @@ class LayoutChat:
 		"""
 		if self.verbose:
 			print(f"\n--- LayoutChat: Received Agent Output (length: {len(agent_output_str)}) ---")
+			print(f"--- LayoutChat: Original User Query: {user_original_query} ---") # Log for clarity
 			if content_images:
 				print(f"--- LayoutChat: Received {len(content_images)} content image(s) ---")
 			if layout_inspiration_screenshots:
@@ -187,10 +192,11 @@ class LayoutChat:
 				"type": "text",
 				"text": (
 					f"Please reformat and enhance the following main content. "
+					f"The original user query was: '{user_original_query}'. " # Explicitly provide original query
 					f"If 'content images' are provided (see below), integrate their context. "
 					f"Use any 'layout inspiration screenshots' (also below) to guide the visual style. "
-					f"Respond with the best format in order to answer my intitial query with an understandable, clear way for me."
-					f"Only answer with the final markdown content, no additional text or explanations.\n\n"
+					f"Respond with the best format in order to answer my initial query with an understandable, clear way for me."
+					f"Only answer with the final HTML content, no additional text or explanations.\n\n"
 					f"Main Content:\n---\n{agent_output_str}\n---"
 					# f"{link_context_text}" # If you were to use the optional link extraction
 				)
@@ -241,9 +247,7 @@ class LayoutChat:
 		messages_for_layout_llm: List[BaseMessage] = [
 			SystemMessage(content=self.layout_system_prompt)
 		]
-		# Add LayoutChat's own history
-		messages_for_layout_llm.extend(self.chat_history)
-		# Add the current complex human input
+		# REMOVED: messages_for_layout_llm.extend(self.chat_history)
 		messages_for_layout_llm.append(HumanMessage(content=human_message_content))
 
 
@@ -258,17 +262,11 @@ class LayoutChat:
 
 			final_response_str = "".join(full_layout_response_content)
 
-			# Add to LayoutChat's history
-			history_human_input_summary = f"Reformatted text. Input length: {len(agent_output_str)}. "
-			history_human_input_summary += f"Content images: {len(content_images) if content_images else 0}. "
-			history_human_input_summary += f"Layout inspiration: {len(layout_inspiration_screenshots) if layout_inspiration_screenshots else 0}."
-
-			self.chat_history.append(HumanMessage(content=history_human_input_summary))
-			self.chat_history.append(AIMessage(content=final_response_str))
-
-			# Limit history size (e.g., last 5 pairs / 10 messages)
-			if len(self.chat_history) > 10:
-				self.chat_history = self.chat_history[-10:]
+			# REMOVED: History management as LayoutChat is now stateless per call
+			# self.chat_history.append(HumanMessage(content=history_human_input_summary))
+			# self.chat_history.append(AIMessage(content=final_response_str))
+			# if len(self.chat_history) > 10:
+			# 	self.chat_history = self.chat_history[-10:]
 
 		except Exception as e:
 			error_message = f"[LayoutChat Error: Error during layout model streaming: {e}]"
@@ -277,11 +275,9 @@ class LayoutChat:
 				import traceback
 				traceback.print_exc(file=sys.stderr)
 			
-			history_human_input_summary = f"Error processing text. Input length: {len(agent_output_str)}. "
-			history_human_input_summary += f"Content images: {len(content_images) if content_images else 0}. "
-			history_human_input_summary += f"Layout inspiration: {len(layout_inspiration_screenshots) if layout_inspiration_screenshots else 0}."
-			self.chat_history.append(HumanMessage(content=history_human_input_summary))
-			self.chat_history.append(AIMessage(content=error_message)) # Log error in history
+			# REMOVED: History management as LayoutChat is now stateless per call
+			# self.chat_history.append(HumanMessage(content=history_human_input_summary))
+			# self.chat_history.append(AIMessage(content=error_message)) # Log error in history
 			return
 
 		if self.verbose: print("\n--- LayoutChat: Processing Complete ---")
@@ -300,6 +296,8 @@ if __name__ == "__main__":
 		"Paris is also a major global hub for finance, diplomacy, commerce, fashion, science, and the arts."
 		" For more details, see [Official Paris Tourism](https://en.parisinfo.com)."
 	)
+	# Example user original query
+	sample_user_query = "Tell me about Paris and its famous landmarks."
 
 	# For testing, create dummy image files or use actual paths
 	# e.g., create empty files:
@@ -324,12 +322,15 @@ if __name__ == "__main__":
 	print(f"\n--- Input to LayoutChat ---")
 	print("Agent Output String:")
 	print(sample_agent_output)
+	print("Original User Query:")
+	print(sample_user_query)
 	print(f"Content Images: {content_images_paths}")
 	print(f"Layout Inspiration Screenshots: {layout_inspiration_paths}")
 	print("---------------------------\n")
 
 	response_iterator = layout_chat.run(
 		agent_output_str=sample_agent_output,
+		user_original_query=sample_user_query, # Pass the original query
 		content_images=content_images_paths,
 		layout_inspiration_screenshots=layout_inspiration_paths
 	)
