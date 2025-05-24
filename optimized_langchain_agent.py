@@ -356,6 +356,10 @@ class OptimizedLangchainAgent:
 			layout_chat_instance = LayoutChat(verbose=self.verbose_agent, html_output=html_output)
 
 			if self.verbose_agent: print("--- Calling LayoutChat.run() for final formatted response ---", file=sys.stderr)
+
+			if html_output:
+				yield "<html_token>"
+				
 			for chunk in layout_chat_instance.run(
 				agent_output_str=agent_output_str,
 				user_original_query=user_original_query, # Pass the original query here
@@ -363,6 +367,10 @@ class OptimizedLangchainAgent:
 				layout_inspiration_screenshots=final_layout_inspiration_images
 			):
 				yield chunk
+			
+			if html_output:
+				yield "</html_token>"
+
 			if agent_output_str.strip() or newly_generated_content_images or final_layout_inspiration_images : print() # Add a newline after layout chat if there was input
 		
 		except SystemExit as e:
