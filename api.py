@@ -189,5 +189,45 @@ def serve_image(filename):
 			return jsonify({'error': str(e)}), 500
 	return send_from_directory(images_dir, filename)
 
+@app.route('/conversations', methods=['GET', 'POST'])
+def conversations():
+	file_path = os.path.join(os.getcwd(), 'conversations.json')
+	if request.method == 'GET':
+		if not os.path.exists(file_path):
+			return jsonify({})
+		try:
+			with open(file_path, 'r', encoding='utf-8') as f:
+				content = f.read().strip()
+				if not content:
+					return jsonify({})
+				data = json.loads(content)
+			return jsonify(data)
+		except Exception:
+			return jsonify({})
+	else:  # POST
+		data = request.get_json()
+		with open(file_path, 'w', encoding='utf-8') as f:
+			json.dump(data, f, ensure_ascii=False, indent=2)
+		return jsonify({"ok": True})
+
+# Endpoint para obtener rutas de imágenes asociadas a un mensaje específico (opcional, granularidad por mensaje)
+@app.route('/images_for_message/<chat_id>/<int:msg_index>', methods=['GET'])
+def images_for_message(chat_id, msg_index):
+	file_path = os.path.join(os.getcwd(), 'conversations.json')
+	if not os.path.exists(file_path):
+		return jsonify({'images': []})
+	with open(file_path, 'r', encoding='utf-8') as f:
+		data = json.load(f)
+	chat = data.get(chat_id)
+	if not chat:
+		return jsonify({'images': []})
+	messages = chat.get('messages', [])
+	if msg_index < 0 or msg_index >= len(messages):
+		return jsonify({'images': []})
+	images = messages[msg_index].get('images', [])
+	# Devuelve rutas completas para el frontend
+	image_paths = [f"/images/{img}" for img in images]
+	return jsonify({'images': image_paths})
+
 if __name__ == '__main__':
 	app.run(debug=True)
