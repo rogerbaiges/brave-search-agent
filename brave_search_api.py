@@ -167,6 +167,24 @@ class BraveSearchManual:
 		except Exception as e:
 			raise ToolException(f"Unexpected error during Brave image search: {e}") from e
 
+	def _download_img_from_url(self, url: str, save_path: str):
+		"""Downloads an image from a URL image and saves it to a specified path."""
+		# Create the directory if it doesn't exist
+		os.makedirs(os.path.dirname(save_path), exist_ok=True)
+		try:
+			response = requests.get(url, stream=True)
+			response.raise_for_status()
+			with open(save_path, "wb") as f:
+				for chunk in response.iter_content(1024):
+					f.write(chunk)
+			if self.verbose: print(f"--- Image saved to {save_path} ---")
+		except requests.exceptions.RequestException as e:
+			print(f"--- Image download failed: {e} ---")
+			raise ToolException(f"Image download failed: {e}")
+		except Exception as e:
+			print(f"--- Unexpected error during image download: {e} ---")
+			raise ToolException(f"Unexpected error during image download: {e}")
+
 	# def search_images(
 	# 	self,
 	# 	query: str,

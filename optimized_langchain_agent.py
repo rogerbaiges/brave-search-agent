@@ -250,7 +250,8 @@ class OptimizedLangchainAgent:
 				   task: str,
 				   empty_data_folders: bool = True,
 				   data_folders: list[str] = [IMAGES_DIR, SCREENSHOTS_DIR],
-				   layout_inspiration_image_paths: Optional[List[str]] = None
+				   layout_inspiration_image_paths: Optional[List[str]] = None,
+				   html_output: bool = True
 				   ) -> Iterator[str]:
 		if self.verbose_agent:
 			print(f"\n--- Task Received for Run with Layout ---\n{task}")
@@ -340,7 +341,7 @@ class OptimizedLangchainAgent:
 		# 5. Initialize LayoutChat and stream its formatted response
 		try:
 			if self.verbose_agent: print("\n--- Initializing LayoutChat for Enhanced Formatting ---", file=sys.stderr)
-			layout_chat_instance = LayoutChat(verbose=self.verbose_agent)
+			layout_chat_instance = LayoutChat(verbose=self.verbose_agent, html_output=html_output)
 
 			if self.verbose_agent: print("--- Calling LayoutChat.run() for final formatted response ---", file=sys.stderr)
 			for chunk in layout_chat_instance.run(
@@ -427,6 +428,10 @@ def main():
 			except: pass
 
 
+		output_file = "output_layout.html"
+		with open(output_file, "w", encoding="utf-8") as f:
+			f.write("")
+
 		print(f"Running task (layout test 1): {task_for_layout_1}")
 		for token in langchain_agent.run_layout(
 			task_for_layout_1,
@@ -434,6 +439,10 @@ def main():
 			layout_inspiration_image_paths=None # Rely on new files in SCREENSHOTS_DIR
 		):
 			print(token, end="", flush=True)
+
+			with open(output_file, "a", encoding="utf-8") as f:
+				f.write(token)
+
 		print(separator)
 
 
@@ -441,6 +450,10 @@ def main():
 		print(separator)
 		print("TEST 2: empty_data_folders=False, explicit inspiration_paths")
 		task_for_layout_2 = "Tell me about the Perseverance rover on Mars. Find general info and images."
+
+		output_file = "output_layout_2.html"
+		with open(output_file, "w", encoding="utf-8") as f:
+			f.write("")
 		
 		# Ensure dummy_inspiration_path exists for this test
 		explicit_inspiration = []
@@ -466,6 +479,8 @@ def main():
 			layout_inspiration_image_paths=explicit_inspiration
 		):
 			print(token, end="", flush=True)
+			with open(output_file, "a", encoding="utf-8") as f:
+				f.write(token)
 		print(separator)
 
 		# Clean up dummy images
