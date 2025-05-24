@@ -91,7 +91,31 @@ def plan():
     system_date_message = {'role': 'system', 'content': f'Today is {today_str}.'}
     chat_history_with_date = [system_date_message] + chat_history
     def generate():
+        started = False
         for token in planner_agent.run(query, chat_history=chat_history_with_date):
+            if not started:
+                # Skip initial <think> ... </think> block if present
+                if token.strip().startswith("<think>"):
+                    # Consume tokens until </think> is found
+                    buffer = token
+                    if "</think>" in buffer:
+                        # Remove up to and including </think>
+                        after_think = buffer.split("</think>", 1)[1]
+                        if after_think.strip():
+                            yield after_think
+                        started = True
+                        continue
+                    for token in planner_agent.run(query, chat_history=chat_history_with_date):
+                        buffer += token
+                        if "</think>" in buffer:
+                            after_think = buffer.split("</think>", 1)[1]
+                            if after_think.strip():
+                                yield after_think
+                            started = True
+                            break
+                    continue
+                else:
+                    started = True
             yield token
     return Response(generate(), mimetype='text/plain')
 
