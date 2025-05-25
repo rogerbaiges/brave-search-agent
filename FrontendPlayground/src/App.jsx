@@ -336,6 +336,24 @@ export default function BravePlayground() {
             className="bg-gray-800 text-orange-100 border border-orange-400 rounded-lg p-4 mb-2"
             style={{ wordBreak: 'break-word' }}
           >
+            <style>{`
+              .html-token-block h1 { color: #fb923c; font-size: 1.5rem; font-weight: bold; margin: .5rem 0 .75rem; }
+              .html-token-block h2 { color: #fdba74; font-size: 1.25rem; font-weight: bold; margin: .5rem 0; }
+              .html-token-block p { margin-bottom: .5rem; color: #fef3c7; line-height: 1.6; }
+              .html-token-block ul { margin-bottom: .5rem; padding-left: 1.5rem; list-style-type: disc; color: #fdba74; }
+              .html-token-block ol { margin-bottom: .5rem; padding-left: 1.5rem; list-style-type: decimal; color: #fdba74; }
+              .html-token-block li { margin-bottom: .25rem; padding-left: .25rem; color: #fef3c7; }
+              .html-token-block a { color: #fdba74; text-decoration: underline; transition: color .2s; }
+              .html-token-block a:hover { color: #fb923c; }
+              .html-token-block code { background: #111827; color: #fdba74; padding: .1em .3em; border-radius: .25em; }
+              .html-token-block img { max-width: 100%; border-radius: .5rem; border: 2px solid #fdba74; margin: .5rem 0; box-shadow: 0 2px 8px rgba(251,146,60,.15); }
+              .html-token-block table { width: 100%; border-collapse: collapse; margin: 1rem 0; background: #18181b; color: #fef3c7; border-radius: 0.5rem; overflow: hidden; }
+              .html-token-block thead { background: #fb923c; color: #18181b; }
+              .html-token-block th, .html-token-block td { border: 1px solid #fdba74; padding: 0.5rem 1rem; text-align: left; }
+              .html-token-block th { font-weight: bold; background: #fb923c; color: #18181b; }
+              .html-token-block tr:nth-child(even) { background: #27272a; }
+              .html-token-block tr:nth-child(odd) { background: #18181b; }
+            `}</style>
             <div className="html-token-block" dangerouslySetInnerHTML={{ __html: html }} />
           </div>
           {after && (
