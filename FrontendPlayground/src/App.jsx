@@ -296,75 +296,68 @@ export default function BravePlayground() {
       .replace(/```html\s*/gi, '')
       .replace(/```/g, '');
 
-    const htmlRegex = /<html_token>([\s\S]*?)<\/html_token>/gi;
-    let lastIndex = 0;
-    let parts = [];
-    let match;
-    while ((match = htmlRegex.exec(cleanContent)) !== null) {
-      if (match.index > lastIndex) {
-        parts.push({ type: 'markdown', content: cleanContent.slice(lastIndex, match.index) });
-      }
-      parts.push({ type: 'html', content: match[1] });
-      lastIndex = htmlRegex.lastIndex;
-    }
-    if (lastIndex < cleanContent.length) {
-      parts.push({ type: 'markdown', content: cleanContent.slice(lastIndex) });
-    }
+    // Eliminar cualquier bloque <style>...</style>
+    cleanContent = cleanContent.replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, '');
 
     const markdownComponents = {
       a: ({ node, ...props }) => (
-        <a
-          {...props}
-          className="underline text-orange-300 hover:text-orange-500 transition-colors duration-200"
-          target="_blank"
-          rel="noopener noreferrer"
-        />
+        <a {...props} className="underline text-orange-300 hover:text-orange-500 transition-colors duration-200" target="_blank" rel="noopener noreferrer" />
       ),
-      li: ({ node, ...props }) => <li {...props} className="mb-2 pl-2 list-disc list-inside" />,
-      p: ({ node, ...props }) => <p {...props} className="mb-2" />,
-      strong: ({ node, ...props }) => <strong {...props} className="text-orange-400" />,
-      em: ({ node, ...props }) => <em {...props} className="italic text-orange-200" />,
-      ul: ({ node, ...props }) => <ul {...props} className="mb-2 pl-4" />,
-      ol: ({ node, ...props }) => <ol {...props} className="mb-2 pl-4 list-decimal list-inside" />,
-      code: ({ node, ...props }) => <code {...props} className="bg-gray-900 text-orange-300 px-1 rounded" />,
+      li: ({ node, ...props }) => <li {...props} className="mb-2 pl-2 list-disc list-inside" />, 
+      p: ({ node, ...props }) => <p {...props} className="mb-2" />, 
+      strong: ({ node, ...props }) => <strong {...props} className="text-orange-400" />, 
+      em: ({ node, ...props }) => <em {...props} className="italic text-orange-200" />, 
+      ul: ({ node, ...props }) => <ul {...props} className="mb-2 pl-4" />, 
+      ol: ({ node, ...props }) => <ol {...props} className="mb-2 pl-4 list-decimal list-inside" />, 
+      code: ({ node, ...props }) => <code {...props} className="bg-gray-900 text-orange-300 px-1 rounded" />, 
     };
 
-    return (
-      <>
-        {parts.map((part, idx) =>
-          part.type === 'html' ? (
-            <div
-              key={idx}
-              className="bg-gray-800 text-orange-100 border border-orange-400 rounded-lg p-4 mb-2"
-              style={{ wordBreak: 'break-word' }}
-            >
-              {/* Estilos extra para HTML embebido */}
-              <style>{`
-                .html-token-block h1 { color: #fb923c; font-size: 1.5rem; font-weight: bold; margin: .5rem 0 .75rem; }
-                .html-token-block h2 { color: #fdba74; font-size: 1.25rem; font-weight: bold; margin: .5rem 0; }
-                .html-token-block p { margin-bottom: .5rem; color: #fef3c7; line-height: 1.6; }
-                .html-token-block ul { margin-bottom: .5rem; padding-left: 1.5rem; list-style-type: disc; color: #fdba74; }
-                .html-token-block ol { margin-bottom: .5rem; padding-left: 1.5rem; list-style-type: decimal; color: #fdba74; }
-                .html-token-block li { margin-bottom: .25rem; padding-left: .25rem; color: #fef3c7; }
-                .html-token-block a { color: #fdba74; text-decoration: underline; transition: color .2s; }
-                .html-token-block a:hover { color: #fb923c; }
-                .html-token-block code { background: #111827; color: #fdba74; padding: .1em .3em; border-radius: .25em; }
-                .html-token-block img { max-width: 100%; border-radius: .5rem; border: 2px solid #fdba74; margin: .5rem 0; box-shadow: 0 2px 8px rgba(251,146,60,.15); }
-              `}</style>
-              <div className="html-token-block" dangerouslySetInnerHTML={{ __html: part.content }} />
-            </div>
-          ) : (
+    const start = cleanContent.indexOf('<html_token>');
+    const end = cleanContent.indexOf('</html_token>');
+
+    if (start !== -1) {
+      const before = cleanContent.slice(0, start);
+      const html = end !== -1
+        ? cleanContent.slice(start + 12, end)
+        : cleanContent.slice(start + 12);
+      const after = end !== -1 ? cleanContent.slice(end + 13) : '';
+
+      return (
+        <>
+          {before && (
             <ReactMarkdown
-              key={idx}
-              children={part.content}
+              children={before}
               remarkPlugins={[remarkGfm]}
               rehypePlugins={[rehypeRaw]}
               components={markdownComponents}
             />
-          ),
-        )}
-      </>
-    );
+          )}
+          <div
+            className="bg-gray-800 text-orange-100 border border-orange-400 rounded-lg p-4 mb-2"
+            style={{ wordBreak: 'break-word' }}
+          >
+            <div className="html-token-block" dangerouslySetInnerHTML={{ __html: html }} />
+          </div>
+          {after && (
+            <ReactMarkdown
+              children={after}
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[rehypeRaw]}
+              components={markdownComponents}
+            />
+          )}
+        </>
+      );
+    } else {
+      return (
+        <ReactMarkdown
+          children={cleanContent}
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={[rehypeRaw]}
+          components={markdownComponents}
+        />
+      );
+    }
   }
 
   /* --------------------------------------------------------------------
@@ -373,9 +366,7 @@ export default function BravePlayground() {
   const BraveLogo = () => (
     <div className="flex items-center">
       <div className="relative">
-        <div className="w-8 h-8 bg-gradient-to-br from-orange-400 to-orange-600 rounded-lg flex items-center justify-center shadow-lg">
-          <div className="w-5 h-5 bg-white rounded mask-triangle" />
-        </div>
+        <img src="/src/assets/Brave-AI-logo.png" alt="Brave Logo" className="w-8 h-8" />
         <div className="absolute -top-1 -right-1 w-3 h-3 bg-orange-300 rounded-full animate-pulse" />
       </div>
     </div>
@@ -893,13 +884,6 @@ export default function BravePlayground() {
                             {new Date(message.timestamp).toLocaleTimeString()}
                           </div>
                         </div>
-                        
-                        {/* Avatar for user messages */}
-                        {message.role === 'user' && (
-                          <div className="absolute -right-2 top-4 w-8 h-8 bg-gradient-to-br from-orange-400 to-orange-600 rounded-full flex items-center justify-center text-white text-sm font-bold shadow-lg">
-                            U
-                          </div>
-                        )}
                       </div>
                     </div>
                   );
