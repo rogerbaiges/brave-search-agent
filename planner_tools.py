@@ -232,7 +232,7 @@ class RouteInput(BaseModel):
 def plan_route_ors(locations: List[str]) -> str:
     """
     Calculates route information between a sequence of locations using OpenRouteService (ORS) for land travel
-    and estimates for flights. Takes a list of location strings.
+    and estimates for flights. Takes a list of location strings like city names or village names (just the name no abreviation or what country they are full correct name).
     It provides viable transport modes (Car, Flight, Cycling, Walking) for each segment based on distance heuristics.
     Cycling/Walking are only considered for shorter, land-based segments. Flights are estimated for long distances or
     if car routes fail over significant distances (e.g., ocean crossings).
