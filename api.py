@@ -151,14 +151,35 @@ def conversations():
     return jsonify({"ok": True})
 
 
+@app.route("/conversations/order", methods=["POST"])
+def update_conversation_order():
+    data = request.get_json() or {}
+    order = data.get("order")  # Debe ser una lista de IDs en el nuevo orden
+    if not order or not isinstance(order, list):
+        return jsonify({"error": "Missing or invalid order"}), 400
+
+    historico = read_conversations()
+    for idx, chat_id in enumerate(order):
+        if chat_id in historico:
+            historico[chat_id]["order"] = idx
+    write_conversations(historico)
+    return jsonify({"ok": True})
+
+
 @app.route("/conversation/new", methods=["POST"])
 def new_conversation():
     body = request.get_json() or {}
     name = body.get("name", "Sin nombre")
 
     historico = read_conversations()
+    # Calcula el siguiente valor de order
+    if historico:
+        max_order = max((c.get("order", 0) for c in historico.values()), default=0)
+        new_order = max_order + 1
+    else:
+        new_order = 0
     new_id = str(uuid4())
-    historico[new_id] = {"name": name, "messages": []}
+    historico[new_id] = {"name": name, "messages": [], "order": new_order}
     write_conversations(historico)
 
     return jsonify({"id": new_id, "name": name})

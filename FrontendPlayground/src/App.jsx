@@ -6,6 +6,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
 import { v4 as uuidv4 } from 'uuid'
+import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd'
 
 // Helper function for streaming fetch
 async function callBackendStream({ endpoint, body, onToken }) {
@@ -84,16 +85,29 @@ export default function BravePlayground() {
   // 3️⃣  Mantener scroll al fondo en cada render
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  // 4️⃣  Traer histórico de conversaciones al montar
+  }, [messages]);  // 4️⃣  Traer histórico de conversaciones al montar
   useEffect(() => {
+    console.log('🔄 Cargando conversaciones desde backend...');
     fetch('http://localhost:5000/conversations')
       .then(res => res.json())
       .then(data => {
-        setHistorico(data);
-        const ids = Object.keys(data);
+        console.log('📥 Conversaciones recibidas del backend:', data);
+        // Asegurar que cada conversación tenga un orden
+        const historicoConOrden = {};
+        Object.entries(data).forEach(([id, chat], index) => {
+          historicoConOrden[id] = {
+            ...chat,
+            order: chat.order ?? index
+          };
+        });
+        console.log('📋 Histórico con orden asignado:', historicoConOrden);
+        setHistorico(historicoConOrden);
+        const ids = Object.keys(historicoConOrden);
         if (ids.length) setChatId(ids[0]);
+      })
+      .catch(error => {
+        console.error('❌ Error al cargar conversaciones:', error);
+        setHistorico({});
       });
   }, []);
 
@@ -115,7 +129,6 @@ export default function BravePlayground() {
     setNewChatName('');
     setShowNewChatModal(true);
   }
-
   async function createChat() {
     const name = newChatName.trim() || 'Sin nombre';
     const res = await fetch('http://localhost:5000/conversation/new', {
@@ -124,9 +137,17 @@ export default function BravePlayground() {
       body: JSON.stringify({ name }),
     });
     const data = await res.json();
+    
+    // Obtener el siguiente orden
+    const nextOrder = Object.keys(historico).length;
+    
     setHistorico(prev => ({
       ...prev,
-      [data.id]: { name: data.name, messages: [] },
+      [data.id]: { 
+        name: data.name, 
+        messages: [], 
+        order: nextOrder 
+      },
     }));
     setChatId(data.id);
     setShowNewChatModal(false);
@@ -535,56 +556,118 @@ export default function BravePlayground() {
               <span className="text-xs text-gray-500 bg-gray-700/30 px-2 py-1 rounded-full">
                 {Object.keys(historico).length}
               </span>
-            </div>
-            <div className="space-y-2">
-              {Object.entries(historico).map(([id, chat]) => (
-                <div
-                  key={id}
-                  className={`group relative p-3 rounded-xl cursor-pointer transition-all duration-200 hover:bg-gray-700/30 ${
-                    id === chatId ? 'bg-gradient-to-r from-orange-500/10 to-orange-400/5 border border-orange-500/20' : 'hover:scale-[1.02]'
-                  }`}
-                  onClick={() => setChatId(id)}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <div className={`p-1.5 rounded-lg ${id === chatId ? 'bg-orange-500/20' : 'bg-gray-700/50'}`}>
-                        <MessageSquare className={`w-3 h-3 ${id === chatId ? 'text-orange-400' : 'text-gray-400'}`} />
-                      </div>
-                      <span
-                        className={`text-sm truncate ${id === chatId ? 'text-orange-100 font-medium' : 'text-gray-300'}`}
-                      >
-                        {chat.name || 'Sin nombre'}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                      <button
-                        className="p-1.5 text-gray-400 hover:text-orange-400 hover:bg-orange-500/10 rounded-lg transition-all duration-200"
-                        onClick={e => {
-                          e.stopPropagation();
-                          openRenameModal(id, chat.name);
-                        }}
-                        title="Renombrar"
-                      >
-                        <Edit3 size={12} />
-                      </button>
-                      <button
-                        className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all duration-200"
-                        onClick={e => {
-                          e.stopPropagation();
-                          deleteChat(id);
-                        }}
-                        title="Eliminar"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
+            </div>            <DragDropContext
+              onDragEnd={result => {
+                if (!result.destination) return;
+                
+                // Obtener el array ordenado actual
+                const chatArray = Object.entries(historico)
+                  .map(([id, chat]) => ({ id, ...chat }))
+                  .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+                
+                // Reordenar localmente
+                const [movedItem] = chatArray.splice(result.source.index, 1);
+                chatArray.splice(result.destination.index, 0, movedItem);
+                
+                // Crear nuevo estado con orden actualizado
+                const nuevoHistorico = { ...historico };
+                chatArray.forEach((chat, index) => {
+                  if (nuevoHistorico[chat.id]) {
+                    nuevoHistorico[chat.id] = {
+                      ...nuevoHistorico[chat.id],
+                      order: index
+                    };
+                  }
+                });
+                  setHistorico(nuevoHistorico);
+                  // Enviar orden al backend
+                const orderIds = chatArray.map(chat => chat.id);
+                console.log('🚀 Enviando orden al backend:', orderIds);
+                
+                fetch('http://localhost:5000/conversations/order', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ order: orderIds })
+                })
+                .then(response => {
+                  console.log('📡 Respuesta del backend status:', response.status);
+                  return response.json();
+                })
+                .then(data => {
+                  console.log('✅ Backend confirmó actualización:', data);
+                })
+                .catch(error => {
+                  console.error('❌ Error actualizando orden en backend:', error);
+                });
+              }}
+            >
+              <Droppable droppableId="sidebar-chats">
+                {provided => (
+                  <div className="space-y-2" ref={provided.innerRef} {...provided.droppableProps}>
+                    {Object.entries(historico)
+                      .map(([id, chat]) => ({ id, ...chat }))
+                      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+                      .map((chat, idx) => (                        <Draggable key={chat.id} draggableId={chat.id} index={idx}>
+                          {(providedDraggable, snapshot) => (
+                            <div
+                              ref={providedDraggable.innerRef}
+                              {...providedDraggable.draggableProps}
+                              {...providedDraggable.dragHandleProps}
+                              className={`group relative p-3 rounded-xl cursor-pointer transition-all duration-200 hover:bg-gray-700/30 ${
+                                chat.id === chatId ? 'bg-gradient-to-r from-orange-500/10 to-orange-400/5 border border-orange-500/20' : 'hover:scale-[1.02]'
+                              } ${snapshot.isDragging ? 'bg-gray-600/50 shadow-lg scale-105 rotate-2' : ''}`}
+                              onClick={() => setChatId(chat.id)}
+                              style={{
+                                ...providedDraggable.draggableProps.style,
+                                opacity: snapshot.isDragging ? 0.8 : 1,
+                              }}
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3 flex-1 min-w-0">
+                                  <div className={`p-1.5 rounded-lg ${chat.id === chatId ? 'bg-orange-500/20' : 'bg-gray-700/50'}`}> 
+                                    <MessageSquare className={`w-3 h-3 ${chat.id === chatId ? 'text-orange-400' : 'text-gray-400'}`} />
+                                  </div>
+                                  <span
+                                    className={`text-sm truncate ${chat.id === chatId ? 'text-orange-100 font-medium' : 'text-gray-300'}`}
+                                  >
+                                    {chat.name || 'Sin nombre'}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                                  <button
+                                    className="p-1.5 text-gray-400 hover:text-orange-400 hover:bg-orange-500/10 rounded-lg transition-all duration-200"
+                                    onClick={e => {
+                                      e.stopPropagation();
+                                      openRenameModal(chat.id, chat.name);
+                                    }}
+                                    title="Renombrar"
+                                  >
+                                    <Edit3 size={12} />
+                                  </button>
+                                  <button
+                                    className="p-1.5 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all duration-200"
+                                    onClick={e => {
+                                      e.stopPropagation();
+                                      deleteChat(chat.id);
+                                    }}
+                                    title="Eliminar"
+                                  >
+                                    <Trash2 size={12} />
+                                  </button>
+                                </div>
+                              </div>
+                              {chat.id === chatId && (
+                                <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-orange-400 to-orange-600 rounded-r" />
+                              )}
+                            </div>
+                          )}
+                        </Draggable>
+                      ))}
+                    {provided.placeholder}
                   </div>
-                  {id === chatId && (
-                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-orange-400 to-orange-600 rounded-r" />
-                  )}
-                </div>
-              ))}
-            </div>
+                )}
+              </Droppable>
+            </DragDropContext>
           </div>
 
           {/* Botón crear chat */}
