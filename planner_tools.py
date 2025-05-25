@@ -6,6 +6,7 @@ import requests
 import traceback
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
+from urllib.parse import urlencode
 
 from langchain_core.tools import tool, ToolException
 from pydantic.v1 import BaseModel, Field # Using pydantic v1 for compatibility if needed
@@ -395,47 +396,80 @@ def get_operational_details(place_name: str, location: str) -> str:
     return f"Placeholder/Simulated response for '{place_name}' in '{location}'. Specific operational details (hours, address) could not be reliably fetched via available tools. Please search for this information online or assume standard business hours (e.g., 9 AM - 5 PM weekdays) and verify externally. [User verification required]"
 
 
-# 5. Calendar Tool (start_datetime kept mandatory, improved validation)
+# 5. Calendar Tool
 class CalendarEventInput(BaseModel):
     summary: str = Field(description="The title or summary of the event.")
-    # Keeping start_datetime mandatory as per preferred strategy (prompt LLM)
-    start_datetime: str = Field(description="Start date and time in ISO format (e.g., 'YYYY-MM-DD HH:MM:SS' or 'YYYY-MM-DDTHH:MM:SS'). This is REQUIRED.")
-    end_datetime: Optional[str] = Field(default=None, description="End date and time in ISO format. Optional.")
-    location: Optional[str] = Field(default=None, description="Location of the event. Optional.")
-    description: Optional[str] = Field(default=None, description="Description or notes for the event. Optional.")
+    start_datetime: str = Field(description="Start date and time in 'YYYY-MM-DD HH:MM:SS' format (local time). This is REQUIRED.")
+    end_datetime: Optional[str] = Field(default=None, description="End date and time in 'YYYY-MM-DD HH:MM:SS' format (local time). Optional; if not provided, a 1-hour duration from start_datetime will be assumed.")
+    location: Optional[str] = Field(default="", description="Location of the event. Optional.")
+    description: Optional[str] = Field(default="", description="Description or notes for the event. Optional.")
+
+def _format_datetime_for_google(dt_str: str) -> str:
+    """Helper to format datetime string to YYYYMMDDTHHMMSS."""
+    try:
+        dt_obj = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+        return dt_obj.strftime("%Y%m%dT%H%M%S")
+    except ValueError:
+        raise ValueError(f"Invalid datetime format: '{dt_str}'. Expected 'YYYY-MM-DD HH:MM:SS'.")
 
 @tool("add_calendar_event", args_schema=CalendarEventInput)
-def add_calendar_event(summary: str, start_datetime: str, end_datetime: Optional[str] = None, location: Optional[str] = None, description: Optional[str] = None) -> str:
+def add_calendar_event(summary: str, start_datetime: str, end_datetime: Optional[str] = None, location: Optional[str] = "", description: Optional[str] = "") -> str:
     """
-    (Simulated) Adds an event to a user's calendar or task list based on provided details.
-    Requires at least 'summary' and 'start_datetime'.
-    Currently, it just confirms that the event *would* be added based on input validation.
-    """
-    if VERBOSE: print(f"--- Planner Tools: Simulating 'add_calendar_event': {summary} @ {start_datetime} ---", file=sys.stderr)
-    # Validate start_datetime (which is mandatory due to schema)
-    try:
-        # Allow space as separator, replace before parsing
-        dt_str_start = start_datetime.replace(" ", "T")
-        datetime.fromisoformat(dt_str_start)
-    except ValueError:
-        return f"Error: Invalid start_datetime format '{start_datetime}'. Please use valid ISO format like 'YYYY-MM-DD HH:MM:SS' or 'YYYY-MM-DDTHH:MM:SS'."
+    Generates a Google Calendar event creation link that the user can click.
+    Requires 'summary' and 'start_datetime'. 'end_datetime' is optional; if not provided or empty, a 1-hour duration from the start_datetime is automatically assumed by this tool.
+    Both 'start_datetime' and 'end_datetime' (if provided) MUST be in 'YYYY-MM-DD HH:MM:SS' format (local time).
 
-    details = [f"Event: {summary}", f"Starts: {start_datetime}"]
-    # Validate end_datetime if provided
-    if end_datetime:
+    IMPORTANT FOR LLM: When this tool is successfully called, it will return a success message containing a full Google Calendar URL.
+    In your final synthesized plan for the user, you MUST extract this exact URL from the tool's output message
+    and present it as a clickable markdown link using the format:
+    '[Add Event to Google Calendar](THE_EXACT_URL_RETURNED_BY_THIS_TOOL)'.
+    Example tool output: 'Success: Generated Google Calendar link... click link: https://calendar.google.com/...'
+    Your output in the plan should then contain: '[Add Event to Google Calendar](https://calendar.google.com/...)'
+
+    Returns a success message with the Google Calendar URL or an error message if inputs are invalid.
+    """
+    if VERBOSE: print(f"--- Planner Tools: Generating Google Calendar link for: {summary} from {start_datetime} to {end_datetime} ---", file=sys.stderr)
+    if end_datetime is None or not end_datetime.strip():
+        if VERBOSE: print("--- Planner Tools Info: 'end_datetime' not provided or empty. Assuming a default duration of 1 hour. ---", file=sys.stderr)
         try:
-            dt_str_end = end_datetime.replace(" ", "T")
-            # Optional: Check if end is after start
-            if datetime.fromisoformat(dt_str_end) < datetime.fromisoformat(dt_str_start):
-                 return f"Error: Optional end_datetime '{end_datetime}' cannot be before start_datetime '{start_datetime}'."
-            details.append(f"Ends: {end_datetime}")
+            start_dt_obj_for_default = datetime.strptime(start_datetime, "%Y-%m-%d %H:%M:%S")
+            end_datetime = (start_dt_obj_for_default + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+            if VERBOSE: print(f"--- Planner Tools Info: Calculated end_datetime: {end_datetime} ---", file=sys.stderr)
         except ValueError:
-             return f"Error: Invalid end_datetime format '{end_datetime}'. Use ISO format."
+            return "Error: Invalid 'start_datetime' format. Cannot calculate default end_datetime. Please provide 'start_datetime' in 'YYYY-MM-DD HH:MM:SS' format."
+    elif not end_datetime.strip():
+         return "Error: 'end_datetime' was provided as an empty string. Please provide a valid datetime or omit it for a 1-hour default duration."
 
-    if location: details.append(f"Location: {location}")
-    if description: details.append(f"Notes: {description}")
+    try:
+        start_dt_obj = datetime.strptime(start_datetime, "%Y-%m-%d %H:%M:%S")
+        end_dt_obj = datetime.strptime(end_datetime, "%Y-%m-%d %H:%M:%S")
 
-    return f"Success: Simulated adding calendar event:\n- " + "\n- ".join(details) + "\n[Note: This is a simulation. Please add this event to your actual calendar application.]"
+        if end_dt_obj <= start_dt_obj:
+            return f"Error: end_datetime ({end_datetime}) must be after start_datetime ({start_datetime})."
+
+        google_start = _format_datetime_for_google(start_datetime) # Assuming _format_datetime_for_google is defined
+        google_end = _format_datetime_for_google(end_datetime)
+
+        params = {
+            "action": "TEMPLATE",
+            "text": summary,
+            "dates": f"{google_start}/{google_end}",
+            "details": description if description else "",
+            "location": location if location else "",
+        }
+        calendar_url = "https://calendar.google.com/calendar/render?" + urlencode(params)
+
+        return (f"Success: Generated Google Calendar link for event '{summary}'. "
+                f"To add this to your calendar, please click the following link: {calendar_url} "
+                f"[Note: This link will open Google Calendar to create the event. You may need to sign in.]")
+
+    except ValueError as ve:
+        return f"Error: Invalid datetime format provided. {ve}"
+    except Exception as e:
+        if VERBOSE:
+            print(f"--- Planner Tools Error (add_calendar_event): {e} ---", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+        return f"Error: Could not generate calendar link. Details: {e}"
 
 # --- List of tools for the agent ---
 # Define the potential list
