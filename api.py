@@ -63,7 +63,7 @@ search_agent = OptimizedLangchainAgent(
     tools=[general_web_search, find_interesting_links, news_search, weather_search, extended_web_search],
     optimizations_enabled=False,
 )
-planner_agent = PlannerAgent(verbose_agent=True)
+planner_agent = PlannerAgent(verbose_agent=True, max_iterations=15)
 
 # ---------------------------------------------------------------------------
 # ENDPOINTS
@@ -118,22 +118,8 @@ def plan():
     chat_history_with_date = [system_msg] + chat_history
 
     def generate():
-        iterator = iter(planner_agent.run(query, chat_history=chat_history_with_date))
-
-        # ⚙️ Lógica para ignorar <think> inicial
-        stripping = True
-        buffer = ""
-        for token in iterator:
-            if stripping:
-                buffer += token
-                if "</think>" in buffer:
-                    _, _, after = buffer.partition("</think>")
-                    stripping = False
-                    if after.strip():
-                        yield after
-                    buffer = ""
-            else:
-                yield token
+        for token in planner_agent.run(query, chat_history=chat_history_with_date):
+            yield token
 
     return Response(generate(), mimetype="text/plain")
 
