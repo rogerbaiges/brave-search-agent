@@ -214,12 +214,17 @@ class PlannerAgent:
 
     def run(self, task: str, chat_history: List[BaseMessage] = None) -> Iterator[str]:
         if not self.llm_with_tools:
+            yield "<html_token>"
             yield "[Planner Agent Error: LLM with tools not initialized. Cannot process task.]"
+            yield "</html_token>"
             return
         if not self.llm: # Check if base LLM for guidance selection is available
+            yield "<html_token>"
             yield "[Planner Agent Error: Base LLM for guidance selection not initialized. Proceeding with default guidance logic.]"
+            yield "</html_token>"
             # Fallback to simpler logic or just use the default prompt without extra guidance.
             # For now, let's let it proceed, but the select_planning_guidance will use default.
+            return
 
         effective_chat_history = list(chat_history) if chat_history is not None else []
 
@@ -233,13 +238,23 @@ class PlannerAgent:
         task_specific_guidance_str = PlannerAgent.select_planning_guidance(task, self.llm, available_cats)
         
         if self.verbose_agent:
-            print(f"--- Planner Agent: Selected task guidance block (first 100 chars): {task_specific_guidance_str[:100].replace(os.linesep, ' ')}... ---", file=sys.stderr)
-
-        # Prepare initial messages for the main loop
+            print(f"--- Planner Agent: Selected task guidance block (first 100 chars): {task_specific_guidance_str[:100].replace(os.linesep, ' ')}... ---", file=sys.stderr)        # Prepare initial messages for the main loop
         messages: List[BaseMessage] = []
         if effective_chat_history: # If there's existing history from the user/API call
-            messages.extend(effective_chat_history)
-        
+            # Convert dictionary messages to BaseMessage objects
+            for msg in effective_chat_history:
+                if isinstance(msg, dict):
+                    role = msg.get("role", "human")
+                    content = msg.get("content", "")
+                    if role == "system":
+                        messages.append(SystemMessage(content=content))
+                    elif role == "assistant" or role == "ai":
+                        messages.append(AIMessage(content=content))
+                    else:  # default to human message
+                        messages.append(HumanMessage(content=content))
+                else:
+                    # Already a BaseMessage object
+                    messages.append(msg)
         # Inject guidance as an AIMessage simulating an internal thought or context update
         # This message comes *before* the current human task in the sequence for the LLM's consideration
         guidance_message_content = (
@@ -253,11 +268,16 @@ class PlannerAgent:
         messages.append(HumanMessage(content=task)) # Add the current user task
 
         start_time = time.time()
+        
+        # Yield initial HTML token
+        yield "<html_token>"
+        
         try:
             for iteration in range(self.max_iterations):
                 if self.verbose_agent: print(f"\n--- Planner Agent Iteration {iteration + 1}/{self.max_iterations} ---", file=sys.stderr)
 
                 # The self.prompt_template already contains the formatted system message (with dates)
+                
                 # We pass the 'messages' list (which now includes history, guidance, and current task)
                 # to fill the "{chat_history}" placeholder in the template.
                 current_prompt_input_dict = {"chat_history": messages}
@@ -265,8 +285,13 @@ class PlannerAgent:
                 if self.verbose_agent:
                     print(f"--- Planner Agent: Calling LLM. Content for 'chat_history' placeholder (length {len(messages)}). Last few items: ---", file=sys.stderr)
                     for m_idx, m in enumerate(messages[-3:]): # Log last 3 messages for context
-                         print(f"    HistItem {- (len(messages[-3:]) - m_idx)}: Type={type(m).__name__}, Content='{str(m.content)[:120].replace(os.linesep, ' ')}...'")
-                
+                        # Handle both dict and BaseMessage objects
+                        if isinstance(m, dict):
+                            content = str(m.get('content', ''))[:120].replace(os.linesep, ' ')
+                            print(f"    HistItem {- (len(messages[-3:]) - m_idx)}: Type=dict, Content='{content}...'")
+                        else:
+                            content = str(m.content)[:120].replace(os.linesep, ' ') if hasattr(m, 'content') else str(m)[:120].replace(os.linesep, ' ')
+                            print(f"    HistItem {- (len(messages[-3:]) - m_idx)}: Type={type(m).__name__}, Content='{content}...'")
                 # Create the chain for this iteration
                 # The prompt template will prepend the system message
                 chain_for_iteration = self.prompt_template | self.llm_with_tools
@@ -325,6 +350,9 @@ class PlannerAgent:
             print(f"\n--- CRITICAL Error during Planner Agent Execution: {e} ---", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
             yield f"\n[Planner Agent Error: An unexpected error occurred. Details: {e}]"
+        
+        # Yield final HTML token
+        yield "</html_token>"
 
 # --- Example Usage (main function) remains identical to your last provided version ---
 def main():
