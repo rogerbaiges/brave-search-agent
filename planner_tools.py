@@ -37,12 +37,13 @@ def _haversine(lat1, lon1, lat2, lon2):
 def _get_coordinates_owm_robust(location_str: str, api_key: Optional[str]) -> tuple[Optional[tuple[float, float]], str]:
     """
     Gets (latitude, longitude) for a location string.
-    Tries direct parsing, then OWM geocoding, with a fallback for "City, Country" formats.
+    Tries direct parsing if input looks like coordinates, then OWM geocoding, 
+    with a fallback for "City, Suffix" formats if initial geocoding fails.
     Returns ((lat, lon), display_name_for_location) or (None, original_location_str) on failure.
     """
-    if not api_key: # Added check for api_key for OWM geocoding
-        if VERBOSE: print(f"--- Planner Tools Error (_get_coordinates_owm_robust): OpenWeatherMap API Key not available. Cannot geocode '{location_str}' by name. ---", file=sys.stderr)
-        # Try direct parsing only if API key is missing
+    if not api_key:
+        if VERBOSE: print(f"--- Planner Tools Error (_get_coordinates_owm_robust): OpenWeatherMap API Key not available. Cannot geocode '{location_str}' by name without API key. ---", file=sys.stderr)
+        # Minimal parsing attempt if no API key
         if ',' in location_str:
             parts = location_str.split(',')
             if len(parts) == 2:
@@ -55,60 +56,85 @@ def _get_coordinates_owm_robust(location_str: str, api_key: Optional[str]) -> tu
                 except ValueError: pass
         return None, location_str
 
-
     if not location_str or not location_str.strip():
-        if VERBOSE: print(f"--- Planner Tools Info (_get_coordinates_owm_robust): Invalid empty location string provided for '{location_str}'. ---", file=sys.stderr)
+        if VERBOSE: print(f"--- Planner Tools Info (_get_coordinates_owm_robust): Invalid empty location string provided. ---", file=sys.stderr)
         return None, location_str
 
+    # Attempt to parse as direct coordinates FIRST only if it structurally looks like it might be.
+    # This check is to see if both parts can be converted to float.
+    can_be_coords = False
     if ',' in location_str:
         parts = location_str.split(',')
         if len(parts) == 2:
             try:
-                val1, val2 = float(parts[0].strip()), float(parts[1].strip())
-                is_val1_lat, is_val1_lon = -90 <= val1 <= 90, -180 <= val1 <= 180
-                is_val2_lat, is_val2_lon = -90 <= val2 <= 90, -180 <= val2 <= 180
-                if is_val1_lat and is_val2_lon:
-                    if VERBOSE: print(f"--- Planner Tools Info (_get_coordinates_owm_robust): Parsed direct lat,lon for '{location_str}': ({val1}, {val2}) ---", file=sys.stderr)
-                    return (val1, val2), location_str
-                if is_val1_lon and is_val2_lat:
-                    if VERBOSE: print(f"--- Planner Tools Info (_get_coordinates_owm_robust): Parsed direct lon,lat for '{location_str}': ({val2}, {val1}) ---", file=sys.stderr)
-                    return (val2, val1), location_str
-            except ValueError:
-                pass
+                val1_test = float(parts[0].strip())
+                val2_test = float(parts[1].strip())
+                # If both are numbers, then try full coordinate validation
+                is_val1_lat, is_val1_lon = -90 <= val1_test <= 90, -180 <= val1_test <= 180
+                is_val2_lat, is_val2_lon = -90 <= val2_test <= 90, -180 <= val2_test <= 180
+                if (is_val1_lat and is_val2_lon): # lat,lon
+                    if VERBOSE: print(f"--- Planner Tools Info (_get_coordinates_owm_robust): Parsed direct lat,lon for '{location_str}': ({val1_test}, {val2_test}) ---", file=sys.stderr)
+                    return (val1_test, val2_test), location_str
+                if (is_val1_lon and is_val2_lat): # lon,lat
+                    if VERBOSE: print(f"--- Planner Tools Info (_get_coordinates_owm_robust): Parsed direct lon,lat for '{location_str}': ({val2_test}, {val1_test}) ---", file=sys.stderr)
+                    return (val2_test, val1_test), location_str
+                # If they are numbers but not valid lat/lon ranges, it's ambiguous, let geocoding try.
+                # If VERBOSE and not ((is_val1_lat and is_val2_lon) or (is_val1_lon and is_val2_lat)):
+                #     print(f"--- Planner Tools Info (_get_coordinates_owm_robust): '{location_str}' looks like two numbers but not valid lat/lon ranges. Attempting geocoding. ---", file=sys.stderr)
 
+            except ValueError:
+                # One or both parts are not numbers, so it's definitely not direct coordinates.
+                # Proceed to geocoding the full string.
+                pass # can_be_coords remains False
+
+    # OWM Geocoding attempt (internal helper function)
     def _owm_geocode_attempt(query_str, original_input_for_error_msg):
-        geo_url = f"http://api.openweathermap.org/geo/1.0/direct?q={query_str}&limit=1&appid={api_key}"
+        # geo_url = f"http://api.openweathermap.org/geo/1.0/direct?q={query_str}&limit=1&appid={api_key}" # Old
+        # URL encode the query string to handle spaces and special characters safely
+        encoded_query_str = requests.utils.quote(query_str)
+        geo_url = f"http://api.openweathermap.org/geo/1.0/direct?q={encoded_query_str}&limit=1&appid={api_key}"
         try:
             response = requests.get(geo_url, timeout=5)
             response.raise_for_status()
             data = response.json()
             if data and isinstance(data, list) and len(data) > 0 and 'lat' in data[0] and 'lon' in data[0]:
                 lat, lon = data[0]['lat'], data[0]['lon']
-                display_name = data[0].get('name', query_str)
-                country = data[0].get('country', '')
-                full_display_name = f"{display_name}, {country}" if country and country.strip() else display_name
-                if VERBOSE: print(f"--- Planner Tools Info (_get_coordinates_owm_robust): Geocoded '{query_str}' to: {full_display_name} ({lat:.4f}, {lon:.4f}) ---", file=sys.stderr)
-                return (lat, lon), full_display_name
-        except requests.exceptions.RequestException as e:
-            if VERBOSE: print(f"--- Planner Tools Warning (_get_coordinates_owm_robust): OWM Geocoding request failed for '{query_str}': {e} ---", file=sys.stderr)
-        except Exception as e:
-            if VERBOSE: print(f"--- Planner Tools Warning (_get_coordinates_owm_robust): Unexpected error during OWM geocoding for '{query_str}': {e} ---", file=sys.stderr)
+                # Try to construct a good display name
+                name_parts = []
+                if data[0].get('name'): name_parts.append(data[0]['name'])
+                if data[0].get('state') and data[0]['name'] != data[0]['state']: # Avoid "California, California"
+                    name_parts.append(data[0]['state'])
+                if data[0].get('country'): name_parts.append(data[0]['country'])
+                
+                display_name = ", ".join(part for part in name_parts if part) if name_parts else query_str
+
+                if VERBOSE: print(f"--- Planner Tools Info (_get_coordinates_owm_robust): Geocoded '{query_str}' to: {display_name} ({lat:.4f}, {lon:.4f}) ---", file=sys.stderr)
+                return (lat, lon), display_name
+        except requests.exceptions.RequestException as e_req:
+            if VERBOSE: print(f"--- Planner Tools Warning (_get_coordinates_owm_robust): OWM Geocoding request failed for '{query_str}': {e_req} ---", file=sys.stderr)
+        except json.JSONDecodeError as e_json:
+            if VERBOSE: print(f"--- Planner Tools Warning (_get_coordinates_owm_robust): OWM Geocoding returned invalid JSON for '{query_str}': {e_json} ---", file=sys.stderr)
+        except Exception as e_exc:
+            if VERBOSE: print(f"--- Planner Tools Warning (_get_coordinates_owm_robust): Unexpected error during OWM geocoding for '{query_str}': {e_exc} ---", file=sys.stderr)
         return None, original_input_for_error_msg
 
+    # First, try geocoding the original stripped string
     coords, display_name = _owm_geocode_attempt(location_str.strip(), location_str)
     if coords:
         return coords, display_name
 
+    # If that fails AND the original string contained a comma, try the fallback (part before comma)
     if ',' in location_str:
         city_part = location_str.split(',')[0].strip()
+        # Only try fallback if city_part is non-empty and different from original (to avoid redundant calls)
         if city_part and city_part.lower() != location_str.strip().lower():
             if VERBOSE: print(f"--- Planner Tools Info (_get_coordinates_owm_robust): Geocoding for '{location_str}' failed, trying fallback with '{city_part}'... ---", file=sys.stderr)
-            coords, display_name = _owm_geocode_attempt(city_part, city_part)
+            coords, display_name = _owm_geocode_attempt(city_part, city_part) # Use city_part as its own "original" for error msg
             if coords:
-                return coords, display_name
+                return coords, display_name # display_name will be from successful geocoding of city_part
 
     if VERBOSE: print(f"--- Planner Tools Warning (_get_coordinates_owm_robust): Could not find coordinates for '{location_str}' after all attempts. ---", file=sys.stderr)
-    return None, location_str
+    return None, location_str # Return original string if all geocoding fails
 
 
 # --- Tool Definitions ---
@@ -225,7 +251,12 @@ def get_weather_forecast_daily(city: str, days: int = 5) -> str:
 
 # 2. Routing Tool - MODIFIED
 class RouteInput(BaseModel):
-    locations: List[str] = Field(description="A list of two or more locations (city names or coordinates like 'latitude,longitude' or 'longitude,latitude') defining the route segments.")
+    locations: List[str] = Field(description="A list of two or more locations defining the route segments. "
+                    "Each location should be a city-level (or village) name without any abreviation or clarification, "
+                    "a recognized place name that OpenWeatherMap can geocode, or lat/lon coordinates "
+                    "(e.g., '48.8566,2.3522'). "
+                    "IMPORTANT: Do NOT provide specific street addresses as individual items in this list neither landmarks just places; "
+                    "the geocoding works best with city/region names or coordinates.")
     # TODO_LLM_GUIDANCE: Add optional preferred_modes: List[str] = Field(default=None, description="Optional list of preferred modes (e.g., ['Car', 'Flight']). If provided, tool will focus on these.")
 
 @tool("plan_route_ors", args_schema=RouteInput)
