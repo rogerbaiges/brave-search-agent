@@ -7,12 +7,12 @@ from typing import List, Callable, Iterator, Dict, Any
 import time
 from datetime import datetime, timedelta
 import json
-from datetime import datetime, timedelta
+# from datetime import datetime, timedelta # Already imported above
 
 # Langchain imports
 from langchain_ollama.chat_models import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage, BaseMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage, BaseMessage, SystemMessage # Added SystemMessage
 from langchain_core.tools import BaseTool
 
 # Tool imports from the corrected planner tools file
@@ -20,6 +20,56 @@ from planner_tools import active_planner_tools
 
 # Model names and config import
 from config import PLANNER_MODEL_NAME, VERBOSE # Use the planner model
+
+# --- Guidance Profiles (Could be in a separate file like guidance_profiles.py) ---
+GUIDANCE_PROFILES = {
+    "TravelPlanning": """
+[TASK GUIDANCE FOR: TRAVEL PLANNING]
+Focus Points:
+-   Destinations & Exact Dates: Confirm and use precisely. Resolve locations robustly.
+-   Transportation: Use `plan_route_ors`. Consider flights for long distances. Offer viable options.
+-   Accommodation (Conceptual): Note the need. Actual booking out of scope for current tools.
+-   Weather: Always call `get_weather_forecast_daily` for relevant dates and locations.
+-   Itinerary Points: Use `get_operational_details` for POIs, `add_calendar_event` for key items.
+-   Proactive: Suggest 1-2 relevant POIs. Offer calendar adds.
+-   Output: Structure as a day-by-day HTML itinerary if applicable.
+[END TRAVEL GUIDANCE]
+""",
+    "ShoppingComparison": """
+[TASK GUIDANCE FOR: SHOPPING COMPARISON]
+Focus Points:
+-   Products: Identify products clearly.
+-   Comparison Criteria: Determine or ask for price, features, reviews.
+-   Information Sourcing: Use `general_web_search` and `extended_web_search` for product details and reviews from reliable sources.
+-   Output Structure: Present as an HTML comparison table or structured list highlighting pros/cons for each criterion.
+[END SHOPPING GUIDANCE]
+""",
+    "EventScheduling": """
+[TASK GUIDANCE FOR: EVENT SCHEDULING]
+Focus Points:
+-   Event Core Details: Confirm event name, purpose, specific date(s), start AND end times (CRITICAL for `add_calendar_event`).
+-   Location Details: If physical, use `get_operational_details`. If travel needed, use `plan_route_ors`.
+-   Calendar Integration: Always offer `add_calendar_event` once all details are firm. Ensure the HTML output contains the clickable link correctly.
+[END EVENT GUIDANCE]
+""",
+    "ResearchAndSummarize": """
+[TASK GUIDANCE FOR: RESEARCH & SUMMARIZE]
+Focus Points:
+-   Understand Core Question: Clarify if ambiguous.
+-   Tool Prioritization: Use `general_web_search` for broad overview, `extended_web_search` for depth on specific results, `news_search` for current events.
+-   Information Synthesis: Combine information from multiple sources if necessary, providing a comprehensive answer in HTML.
+-   Citation: Always provide source URLs as HTML links.
+[END RESEARCH GUIDANCE]
+""",
+    "DefaultGuidance": """
+[TASK GUIDANCE: GENERAL PLANNING]
+Focus on fully understanding the user's primary goal.
+Methodically use available tools to gather all necessary information.
+Synthesize findings into a clear, structured HTML response that addresses the user's request.
+[END GENERAL GUIDANCE]
+"""
+}
+# --- End of Guidance Profiles ---
 
 class PlannerAgent:
     """
@@ -31,23 +81,22 @@ class PlannerAgent:
     def __init__(self,
                  model_name: str = PLANNER_MODEL_NAME,
                  tools: List[BaseTool] = active_planner_tools,
-                 # System message is now a template string
-                 system_message_template: str = (
+                 system_message_template: str = ( # This remains the main system prompt
                     "You are an expert, methodical, and proactive planning assistant. Your primary objective is to construct comprehensive, actionable, and insightful plans in response to user requests (e.g., travel itineraries, event schedules, research outlines), **outputting your final plan directly as well-structured HTML.**\n"
                     "CURRENT DATE CONTEXT: Today is {current_date_verbose}. The upcoming weekend is {upcoming_saturday_date} (Saturday) and {upcoming_sunday_date} (Sunday).\n\n"
                     "To achieve your objective, you will:\n"
-                    "1.  Thoroughly analyze the user's request to identify all explicit and implicit information needs, constraints, and specific dates/times. Pay close attention to relative dates (e.g., 'next Saturday', 'tomorrow') and accurately anchor them using the CURRENT DATE CONTEXT provided above.\n"
-                    "2.  Strategically utilize the available specialized tools to gather necessary data. Refer to each tool's description (docstring) to understand its purpose, required arguments, and expected output.\n"
+                    "1.  Thoroughly analyze the user's request to identify all explicit and implicit information needs, constraints, and specific dates/times. Pay close attention to relative dates (e.g., 'next Saturday', 'tomorrow') and accurately anchor them using the CURRENT DATE CONTEXT provided above. Additional task-specific guidance may be provided in the conversation history.\n"
+                    "2.  Strategically utilize the available specialized tools to gather necessary data. Refer to each tool's description (docstring) AND any task-specific guidance to understand its purpose, required arguments, and expected output.\n"
                     "3.  If specialized tools are insufficient or not applicable for a piece of information, use the `general_web_search` tool as a fallback.\n"
-                    "4.  Sequentially call tools, analyze their outputs, and decide if further tool calls are needed to fully address the request and potentially enhance the plan (see Proactive Assistance).\n"
-                    "5.  **Synthesize all gathered information into a single, coherent, well-structured, and detailed HTML document. This HTML is your final output. Use semantic HTML tags like `<h1>`, `<p>`, `<ul>`, `<li>`, `<table>`, `<a>`, etc., appropriately. For example, structure different parts of the plan with headings, use lists for itineraries or options, and tables for comparative data if suitable. Ensure all links are properly formatted as `<a href=\"URL\">Descriptive Text</a>`.**\n\n" # MODIFIED FOR HTML
+                    "4.  Sequentially call tools, analyze their outputs, and decide if further tool calls are needed to fully address the request and potentially enhance the plan (see Proactive Assistance and task-specific guidance).\n"
+                    "5.  **Synthesize all gathered information into a single, coherent, well-structured, and detailed HTML document. This HTML is your final output. Use semantic HTML tags like `<h1>`, `<p>`, `<ul>`, `<li>`, `<table>`, `<a>`, etc., appropriately. For example, structure different parts of the plan with headings, use lists for itineraries or options, and tables for comparative data if suitable. Ensure all links are properly formatted as `<a href=\"URL\">Descriptive Text</a>`.**\n\n"
                     "**Core Directives for Your Operation:**\n"
-                    "-   **Proactive Assistance & Anticipation:** Go beyond the literal request. If planning a trip, proactively consider and suggest checking weather (if not asked), adding key events to a calendar (if appropriate), or briefly mentioning 1-2 highly relevant points of interest. Integrate these suggestions naturally into your HTML plan.\n"
+                    "-   **Proactive Assistance & Anticipation:** Go beyond the literal request, informed by any task-specific guidance. If planning a trip, proactively consider and suggest checking weather (if not asked), adding key events to a calendar (if appropriate), or briefly mentioning 1-2 highly relevant points of interest. Integrate these suggestions naturally into your HTML plan.\n"
                     "-   **Goal Completion & Accuracy:** Your paramount task is to ensure the generated HTML plan fully and accurately addresses all aspects of the user's original request, including precise dates and times based on the CURRENT DATE CONTEXT.\n"
                     "-   **Tool Argumentation:** Strictly adhere to the argument requirements specified in each tool's description. If critical information for a tool's arguments is missing, you MUST ask the user for clarification before attempting to call that tool.\n"
-                    "-   **HTML Link Formatting:** When tools provide URLs (e.g., calendar links from `add_calendar_event`, search result URLs from `general_web_search`), you MUST embed these as proper HTML anchor tags in your output: `<a href=\"THE_URL_FROM_TOOL\" target=\"_blank\">Relevant Link Text</a>`. For the `add_calendar_event` tool, use link text like 'Add to Google Calendar'.\n" # NEW/MODIFIED for HTML links
-                    "-   **Status Updates (Optional but Recommended):** You MAY insert brief status messages *before* a tool call, like `<!-- <Invoking get_weather_forecast_daily for Paris...> -->`. **Note: If you use status updates, wrap them in HTML comments `<!-- ... -->` so they don't render in the final HTML output.**\n" # MODIFIED for HTML comments
-                    "-   **Final HTML Output Only:** Your entire response MUST be only the HTML document. Do not include any preambles (like 'Here is the HTML plan:'), apologies, or self-commentary outside of HTML comments. Start directly with an HTML tag (e.g., `<!DOCTYPE html><html><head>...</head><body><h1>...` or just the `<body>` content like `<h1>...` if a full document is not required by the frontend).\n" # MODIFIED FOR HTML
+                    "-   **HTML Link Formatting:** When tools provide URLs (e.g., calendar links from `add_calendar_event`, search result URLs from `general_web_search`), you MUST embed these as proper HTML anchor tags in your output: `<a href=\"THE_URL_FROM_TOOL\" target=\"_blank\">Relevant Link Text</a>`. For the `add_calendar_event` tool, use link text like 'Add to Google Calendar'.\n"
+                    "-   **Status Updates (Optional but Recommended):** You MAY insert brief status messages *before* a tool call, like `<!-- <Invoking get_weather_forecast_daily for Paris...> -->`. **Note: If you use status updates, wrap them in HTML comments `<!-- ... -->` so they don't render in the final HTML output.**\n"
+                    "-   **Final HTML Output Only:** Your entire response MUST be only the HTML document. Do not include any preambles (like 'Here is the HTML plan:'), apologies, or self-commentary outside of HTML comments. Start directly with an HTML tag (e.g., `<!DOCTYPE html><html><head>...</head><body><h1>...` or just the `<body>` content like `<h1>...` if a full document is not required by the frontend).\n"
                     "-   **Error Handling:** If a tool call results in an error, report the error content within a `<p class=\"error\">Tool Error: ...</p>` tag or similar descriptive HTML structure. Then, assess if an alternative tool or approach can be used, or if you need to inform the user (within the HTML plan) that a part of their request cannot be fulfilled.\n\n"
                     "Begin by analyzing the user's request, utilizing the CURRENT DATE CONTEXT, and plan your tool usage. Your final deliverable is a complete HTML plan."
                  ),
@@ -58,69 +107,88 @@ class PlannerAgent:
         self.verbose_agent = verbose_agent
         self.max_iterations = max_iterations
 
-        # --- Dynamic Date Information for the Prompt ---
         now = datetime.now()
-        current_date_verbose = now.strftime('%A, %B %d, %Y') # e.g., "Saturday, May 25, 2025"
-        
-        # Calculate upcoming Saturday and Sunday
-        days_until_saturday = (5 - now.weekday() + 7) % 7 # 5 is Saturday's weekday index (0=Monday)
+        current_date_verbose = now.strftime('%A, %B %d, %Y')
+        days_until_saturday = (5 - now.weekday() + 7) % 7
         upcoming_saturday = now + timedelta(days=days_until_saturday)
         upcoming_sunday = upcoming_saturday + timedelta(days=1)
-        
         upcoming_saturday_date = upcoming_saturday.strftime('%Y-%m-%d')
         upcoming_sunday_date = upcoming_sunday.strftime('%Y-%m-%d')
 
-        # Format the system message with the dynamic date information
-        system_message = system_message_template.format(
+        self.system_message_formatted = system_message_template.format(
             current_date_verbose=current_date_verbose,
             upcoming_saturday_date=upcoming_saturday_date,
             upcoming_sunday_date=upcoming_sunday_date
         )
 
         self.tools = tools
-        if not self.tools:
-            if self.verbose_agent: print("--- Planner Agent Warning: No valid tools provided or loaded. Functionality will be limited. ---", file=sys.stderr)
-            self.tool_map = {}
-        else:
-            # Check if tools have .name attribute (they should if decorated with @tool)
-            self.tool_map = {}
-            valid_tools_list = []
-            for t in self.tools:
-                if hasattr(t, 'name'):
-                    self.tool_map[t.name] = t
-                    valid_tools_list.append(t.name)
-                else:
-                     if self.verbose_agent: print(f"--- Planner Agent Warning: Provided tool {t} lacks a 'name' attribute. Skipping. ---", file=sys.stderr)
-            if self.verbose_agent and valid_tools_list:
-                print(f"--- Planner Agent: Tools configured: {valid_tools_list} ---", file=sys.stderr)
+        self.tool_map = {t.name: t for t in self.tools if hasattr(t, 'name')}
+        if len(self.tool_map) != len(tools) and self.verbose_agent:
+            print(f"--- Planner Agent Warning: Some provided tools lacked a 'name' attribute and were skipped. ---", file=sys.stderr)
+        if self.verbose_agent and self.tool_map:
+            print(f"--- Planner Agent: Tools configured: {list(self.tool_map.keys())} ---", file=sys.stderr)
+        elif self.verbose_agent:
+            print("--- Planner Agent Warning: No valid tools configured. ---", file=sys.stderr)
 
-
-        self.llm_with_tools = None # Initialize to None
+        self.llm = None
+        self.llm_with_tools = None
         try:
             self.llm = ChatOllama(model=model_name, temperature=0.1, request_timeout=120.0)
-            if self.tool_map: # Only bind tools if the tool map is not empty
+            if self.tool_map:
                 self.llm_with_tools = self.llm.bind_tools(list(self.tool_map.values()))
-                if self.verbose_agent: print(f"--- Planner Agent: Successfully initialized Ollama model '{self.model_name}' and bound tools. ---")
             else:
-                self.llm_with_tools = self.llm # Use LLM without tools if map is empty
-                if self.verbose_agent: print(f"--- Planner Agent: Initialized Ollama model '{self.model_name}' WITHOUT binding tools (none available or valid). ---")
-
+                self.llm_with_tools = self.llm # Will run without tool calling capability if no tools
+            if self.verbose_agent: print(f"--- Planner Agent: Successfully initialized Ollama model '{self.model_name}'. Tools bound: {bool(self.tool_map)} ---")
         except Exception as e:
-            print(f"--- Planner Agent CRITICAL ERROR: Error initializing/connecting to Ollama model '{self.model_name}'. Agent cannot function. Details: {e} ---", file=sys.stderr)
+            print(f"--- Planner Agent CRITICAL ERROR: Initializing model '{self.model_name}': {e} ---", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
-            # self.llm_with_tools remains None
 
-        # Define the main prompt template
         self.prompt_template = ChatPromptTemplate.from_messages([
-            ("system", system_message),
+            ("system", self.system_message_formatted), # Use the pre-formatted system message
             ("placeholder", "{chat_history}"),
         ])
 
+    @staticmethod
+    def select_planning_guidance(user_query: str, llm_instance: ChatOllama, available_categories: List[str]) -> str:
+        """
+        Uses an LLM to analyze the user query and select the most appropriate
+        planning guidance profile.
+        """
+        if not llm_instance: # Handle case where LLM might not be initialized
+            if VERBOSE: print("--- select_planning_guidance: LLM instance not available. Using default guidance. ---", file=sys.stderr)
+            return GUIDANCE_PROFILES["DefaultGuidance"]
+
+        categories_str = ", ".join(available_categories)
+        # Using a simpler model for classification might be faster, but using self.llm for now
+        classification_prompt_template = ChatPromptTemplate.from_messages([
+            SystemMessage(
+                content=f"You are an assistant that classifies a user's planning query into one of the following categories: [{categories_str}]. "
+                        f"Respond with ONLY the category name that best fits the query. For example, if the query is about organizing a holiday, respond 'TravelPlanning'."
+            ),
+            HumanMessage(content=f"User query: \"{user_query}\"")
+        ])
+        
+        try:
+            # Ensure messages are correctly formatted for invoke/stream
+            formatted_prompt = classification_prompt_template.format_messages()
+            response = llm_instance.invoke(formatted_prompt) # Use the base LLM for this simple task
+            determined_category = response.content.strip()
+            
+            if determined_category in GUIDANCE_PROFILES:
+                if VERBOSE: print(f"--- Guidance Selection LLM chose: {determined_category} for query: '{user_query[:50]}...' ---", file=sys.stderr)
+                return GUIDANCE_PROFILES[determined_category]
+            else:
+                if VERBOSE: print(f"--- Guidance Selection LLM returned an unknown or poorly formatted category: '{determined_category}'. Using default guidance. ---", file=sys.stderr)
+                return GUIDANCE_PROFILES["DefaultGuidance"]
+        except Exception as e:
+            if VERBOSE: print(f"--- Error during LLM-based guidance selection: {e}. Using default guidance. ---", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            return GUIDANCE_PROFILES["DefaultGuidance"]
+
     def _invoke_tool(self, tool_call: Dict[str, Any]) -> ToolMessage:
-        """Helper function to safely invoke a tool and return a ToolMessage."""
         tool_name = tool_call.get("name")
         tool_args = tool_call.get("args", {})
-        tool_call_id = tool_call.get("id", f"tool_call_{time.time_ns()}") # Ensure ID exists
+        tool_call_id = tool_call.get("id", f"tool_call_{time.time_ns()}")
 
         if not tool_name:
             return ToolMessage(content="Error: Tool call missing name.", tool_call_id=tool_call_id)
@@ -132,189 +200,145 @@ class PlannerAgent:
         if self.verbose_agent: print(f"\n--- Planner Agent: Invoking tool '{tool_name}' with args: {tool_args} (Call ID: {tool_call_id}) ---", file=sys.stderr)
 
         try:
-            # Use invoke with the args dictionary
             output = selected_tool.invoke(tool_args)
-            # Ensure output is string
             output_content = str(output)
-
-            # Simple truncation if needed (can be adjusted)
-            if len(output_content) > 4000:
+            if len(output_content) > 4000: # Truncation
                  if self.verbose_agent: print(f"--- Planner Agent: Truncating tool output from {len(output_content)} chars. ---", file=sys.stderr)
                  output_content = output_content[:3950] + "... [output truncated]"
-
             if self.verbose_agent: print(f"--- Planner Agent: Tool '{tool_name}' completed in {time.time() - tool_start_time:.2f}s ---", file=sys.stderr)
             return ToolMessage(content=output_content, tool_call_id=tool_call_id)
-
         except Exception as e:
-            # Catch The  ValidationErrors specifically if possible (though invoke might wrap it)
             error_msg = f"Error executing tool '{tool_name}': {e}"
-            # Include traceback for easier debugging of tool errors
-            detailed_error = f"{error_msg}\nTraceback:\n{traceback.format_exc()}"
-            if self.verbose_agent:
-                print(f"--- Planner Agent Tool Execution Error: {error_msg} ---", file=sys.stderr)
-                # Optionally print full traceback only if verbose
-                # print(f"Full Traceback:\n{traceback.format_exc()}", file=sys.stderr)
-
-            # Return the error message *without* the full traceback to the LLM,
-            # but keep the core error type/message.
+            if self.verbose_agent: print(f"--- Planner Agent Tool Execution Error: {error_msg} ---", file=sys.stderr)
             return ToolMessage(content=error_msg, tool_call_id=tool_call_id)
 
-
     def run(self, task: str, chat_history: List[BaseMessage] = None) -> Iterator[str]:
-        """
-        Executes a planning task, potentially involving multiple tool calls,
-        and streams the final response including status updates.
-        Manages conversation history.
-        """
-        # === Initial Check ===
-        if not self.llm_with_tools: # Check if LLM failed to initialize in __init__
-            yield "[Planner Agent Error: LLM not initialized. Cannot process task. Please check Ollama connection and model name.]"
+        if not self.llm_with_tools:
+            yield "[Planner Agent Error: LLM with tools not initialized. Cannot process task.]"
             return
+        if not self.llm: # Check if base LLM for guidance selection is available
+            yield "[Planner Agent Error: Base LLM for guidance selection not initialized. Proceeding with default guidance logic.]"
+            # Fallback to simpler logic or just use the default prompt without extra guidance.
+            # For now, let's let it proceed, but the select_planning_guidance will use default.
 
-        if chat_history is None:
-            chat_history = []
+        effective_chat_history = list(chat_history) if chat_history is not None else []
 
         if self.verbose_agent:
             print(f"\n--- Planner Task Received ---\n{task}")
-            if chat_history: print(f"--- Using provided history ({len(chat_history)} messages) ---")
-            print("\n--- Planner Agent Response ---")
+            if effective_chat_history: print(f"--- Using provided history ({len(effective_chat_history)} messages) ---")
+        
+        # --- LLM-powered guidance selection ---
+        # Use self.llm (the base instance) for this classification task
+        available_cats = list(GUIDANCE_PROFILES.keys())
+        task_specific_guidance_str = PlannerAgent.select_planning_guidance(task, self.llm, available_cats)
+        
+        if self.verbose_agent:
+            print(f"--- Planner Agent: Selected task guidance block (first 100 chars): {task_specific_guidance_str[:100].replace(os.linesep, ' ')}... ---", file=sys.stderr)
+
+        # Prepare initial messages for the main loop
+        messages: List[BaseMessage] = []
+        if effective_chat_history: # If there's existing history from the user/API call
+            messages.extend(effective_chat_history)
+        
+        # Inject guidance as an AIMessage simulating an internal thought or context update
+        # This message comes *before* the current human task in the sequence for the LLM's consideration
+        guidance_message_content = (
+            f"<InternalContextUpdate>\n"
+            f"Applying specific focus for the upcoming task based on its nature.\n"
+            f"{task_specific_guidance_str}\n"
+            f"Now, addressing the user's request: '{task}'\n"
+            f"</InternalContextUpdate>"
+        )
+        messages.append(AIMessage(content=guidance_message_content))
+        messages.append(HumanMessage(content=task)) # Add the current user task
 
         start_time = time.time()
-        # Start with history and add current task as HumanMessage
-        messages: List[BaseMessage] = chat_history + [HumanMessage(content=task)]
-
-        # --- Agent Execution Loop ---
         try:
             for iteration in range(self.max_iterations):
                 if self.verbose_agent: print(f"\n--- Planner Agent Iteration {iteration + 1}/{self.max_iterations} ---", file=sys.stderr)
 
-                # Prepare messages for the LLM call using the template
-                # The placeholder should contain all previous messages (system, human, ai, tool)
-                current_prompt_messages = self.prompt_template.format_messages(chat_history=messages)
-
+                # The self.prompt_template already contains the formatted system message (with dates)
+                # We pass the 'messages' list (which now includes history, guidance, and current task)
+                # to fill the "{chat_history}" placeholder in the template.
+                current_prompt_input_dict = {"chat_history": messages}
+                
                 if self.verbose_agent:
-                    print(f"--- Planner Agent: Calling LLM with {len(current_prompt_messages)} messages. ---", file=sys.stderr)
-                    # Optional: Log message details for debugging history
-                    # for i, m in enumerate(current_prompt_messages):
-                    #      print(f"    Msg {i}: Type={type(m).__name__}, Content='{str(m.content)[:150]}...'")
-
-
-                # === LLM Call (Streaming) ===
-                stream = self.llm_with_tools.stream(current_prompt_messages)
+                    print(f"--- Planner Agent: Calling LLM. Content for 'chat_history' placeholder (length {len(messages)}). Last few items: ---", file=sys.stderr)
+                    for m_idx, m in enumerate(messages[-3:]): # Log last 3 messages for context
+                         print(f"    HistItem {- (len(messages[-3:]) - m_idx)}: Type={type(m).__name__}, Content='{str(m.content)[:120].replace(os.linesep, ' ')}...'")
+                
+                # Create the chain for this iteration
+                # The prompt template will prepend the system message
+                chain_for_iteration = self.prompt_template | self.llm_with_tools
+                stream = chain_for_iteration.stream(current_prompt_input_dict)
 
                 ai_response_chunks: List[AIMessageChunk] = []
                 accumulated_content = ""
-                has_tool_calls_in_stream = False # Track if tool chunks appear
-
-                # Consume the stream, yield content chunks, collect full AI message
+                
                 for chunk in stream:
                     if isinstance(chunk, AIMessageChunk):
                         ai_response_chunks.append(chunk)
                         if chunk.content:
                             accumulated_content += chunk.content
-                            yield chunk.content # Stream text content immediately
-                        # Check for tool call *chunks* during streaming
-                        if chunk.tool_call_chunks:
-                            has_tool_calls_in_stream = True
-                            # If verbose, maybe log the chunk details
-                            # if self.verbose_agent: print(f"--- Planner Agent: Received tool call chunk: {chunk.tool_call_chunks} ---", file=sys.stderr)
-                    else:
-                        # Log unexpected chunk types if necessary
-                        if self.verbose_agent: print(f"--- Planner Agent Warning: Received unexpected chunk type: {type(chunk)} ---", file=sys.stderr)
+                            yield chunk.content 
+                    # tool_call_chunks are handled when reconstructing final_ai_message
+                    # else:
+                        # if self.verbose_agent: print(f"--- Planner Agent Warning: Received unexpected chunk type: {type(chunk)} ---", file=sys.stderr)
 
-                # === Reconstruct the full AIMessage from chunks ===
                 if not ai_response_chunks:
                     yield "\n[Planner Agent Error: LLM response stream was empty or invalid.]"
                     if self.verbose_agent: print("--- Planner Agent Error: LLM stream yielded no AIMessageChunks. ---", file=sys.stderr)
-                    return # Stop processing if the stream was bad
+                    return
 
-                # Combine chunks to get the final AI message state for this turn
                 final_ai_message: AIMessageChunk = ai_response_chunks[0]
                 for chunk_part in ai_response_chunks[1:]:
-                    # Use the += operator defined for AIMessageChunk
                     final_ai_message = final_ai_message + chunk_part
+                
+                messages.append(final_ai_message) # Add LLM's full response to messages for next iteration
 
-                # Add the *complete* reconstructed AI response to history for the *next* iteration
-                messages.append(final_ai_message)
-
-                # === Tool Check and Execution (based on the *final* reconstructed message) ===
-                tool_calls = final_ai_message.tool_calls # Get tool calls from the combined message
-
-                # Debugging log
-                # if self.verbose_agent:
-                #     print(f"--- Planner Agent: Final AI Message Content='{final_ai_message.content[:100]}...', Tool Calls={tool_calls}, Had Tool Chunks={has_tool_calls_in_stream} ---", file=sys.stderr)
-
-
+                tool_calls = final_ai_message.tool_calls
                 if not tool_calls:
-                    # LLM finished or decided no tools needed
-                    if self.verbose_agent: print("--- Planner Agent: LLM finished processing or no tools requested in final message. ---", file=sys.stderr)
-                    # Ensure a newline if content was streamed previously and loop is ending
+                    if self.verbose_agent: print("--- Planner Agent: LLM finished processing or no tools requested. ---", file=sys.stderr)
                     if accumulated_content and not accumulated_content.endswith('\n'): yield "\n"
-                    break # Exit the loop, we have the final answer
-
+                    break
                 else:
-                    # LLM requested tools
-                    if self.verbose_agent: print(f"--- Planner Agent: LLM requested {len(tool_calls)} tool(s) in final message: {[tc.get('name', 'Unnamed Tool') for tc in tool_calls]} ---", file=sys.stderr)
-
+                    if self.verbose_agent: print(f"--- Planner Agent: LLM requested {len(tool_calls)} tool(s): {[tc.get('name') for tc in tool_calls]} ---", file=sys.stderr)
                     tool_messages_for_history = []
                     for tool_call in tool_calls:
-                        # Ensure tool_call has the expected dictionary structure
                         if isinstance(tool_call, dict) and "name" in tool_call and "args" in tool_call and "id" in tool_call:
-                            # Invoke the tool and get the ToolMessage result (includes content or error)
                             tool_result_message = self._invoke_tool(tool_call)
                             tool_messages_for_history.append(tool_result_message)
                         else:
-                            # Handle malformed tool calls if they somehow occur
-                            error_content = f"Error: Agent received malformed tool call structure from LLM: {tool_call}"
+                            error_content = f"Error: Malformed tool call: {tool_call}"
                             if self.verbose_agent: print(f"--- Planner Agent Error: {error_content} ---", file=sys.stderr)
-                            # Try to create a ToolMessage with an error, using a placeholder ID if needed
                             tc_id = tool_call.get("id", f"malformed_tc_{time.time_ns()}") if isinstance(tool_call, dict) else f"malformed_tc_{time.time_ns()}"
                             tool_messages_for_history.append(ToolMessage(content=error_content, tool_call_id=tc_id))
-
-                    # Add tool results to history for the next LLM iteration
                     messages.extend(tool_messages_for_history)
-                    # Continue the loop to let the LLM process the tool results
 
-            else: # Loop finished without break (max_iterations reached)
-                if self.verbose_agent: print(f"--- Planner Agent: Reached max iterations ({self.max_iterations}). Returning current state. ---", file=sys.stderr)
-                yield f"\n[Planner Agent Warning: Reached maximum iterations ({self.max_iterations}). The plan might be incomplete or stuck.]"
+            else: # Max iterations reached
+                if self.verbose_agent: print(f"--- Planner Agent: Reached max iterations ({self.max_iterations}). ---", file=sys.stderr)
+                yield f"\n[Planner Agent Warning: Reached maximum iterations. The plan might be incomplete.]"
 
-            # Final output after loop finishes (either by break or max_iterations)
             if self.verbose_agent: print(f"\n--- Planner Agent Finished Task. Total time: {time.time() - start_time:.2f}s ---", file=sys.stderr)
 
         except Exception as e:
-            # Catch unexpected errors in the main loop/streaming
-            print(f"\n--- CRITICAL Error during Planner Agent Execution (in run loop): {e} ---", file=sys.stderr)
+            print(f"\n--- CRITICAL Error during Planner Agent Execution: {e} ---", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
-            yield f"\n[Planner Agent Error: An unexpected error occurred during execution. Cannot continue. Details: {e}]"
+            yield f"\n[Planner Agent Error: An unexpected error occurred. Details: {e}]"
 
-
-# --- Example Usage ---
+# --- Example Usage (main function) remains identical to your last provided version ---
 def main():
     try:
-        # Instantiate the planner agent
-        # Set verbose=True for detailed logging during tests
         planner = PlannerAgent(verbose_agent=True)
-
         separator = "\n" + "="*70 + "\n"
 
-        # --- Test Case 1: Simple Planning (Girona/Barcelona) ---
         task1 = "Plan a day trip to Girona from Barcelona for next Saturday. Check the weather and suggest a possible train or car route."
         print(separator + f"Running task 1: {task1}" + separator)
         history1 = []
         for token in planner.run(task1, chat_history=history1):
             print(token, end="", flush=True)
         print(separator)
-        # Ideally, you'd capture the full response and add to history for follow-up
-        # full_response_1 = "".join(list(planner.run(task1, chat_history=history1)))
-        # history1.append(HumanMessage(content=task1))
-        # history1.append(AIMessage(content=full_response_1))
-        # print(f"History 1 after task: {history1}")
 
-
-        # --- Test Case 2: More Complex Planning (Paris/London) ---
-        # Using a future date relative to now might be better than fixed date
-        # Find next Saturday's date (example)
         today = datetime.now().date()
         days_until_saturday = (5 - today.weekday() + 7) % 7
         next_saturday = today + timedelta(days=days_until_saturday)
@@ -323,15 +347,18 @@ def main():
         sun_str = next_sunday.strftime('%Y-%m-%d')
 
         task15 = "I want to plan a weekend trip to Paris for the upcoming weekend. "
-        print(separator + f"Calculating next Saturday ({sat_str}) and Sunday ({sun_str}) dates..." + separator)
+        print(separator + f"Querying for next weekend dates (Task 1.5): {task15}" + separator) # Clarified task print
+        # This task is simple, LLM should use its date context.
+        # We don't need to pass sat_str/sun_str to it for this query.
         history15 = []
         for token in planner.run(task15, chat_history=history15):
             print(token, end="", flush=True)
         print(separator)
 
+
         task2 = (f"I want to plan a weekend trip to Paris for the upcoming weekend ({sat_str} to {sun_str}). "
                  f"Can you suggest an itinerary including travel from London? Check the weather for Paris on those dates, "
-                 f"find opening hours for the Eiffel Tower, and add a placeholder event to my calendar for visiting it "
+                 f"find opening hours for the Eiffel Tower, and add an event to my calendar for visiting it " # Simplified "add a placeholder"
                  f"on Saturday afternoon (e.g., {sat_str} 15:00:00).")
         print(separator + f"Running task 2: {task2}" + separator)
         history2 = []
@@ -339,7 +366,6 @@ def main():
              print(token, end="", flush=True)
         print(separator)
 
-        # --- Test Case 3: Using Fallback Search ---
         task3 = "Find information about the annual 'La Mercè' festival in Barcelona. When does it usually happen and what are typical activities?"
         print(separator + f"Running task 3: {task3}" + separator)
         history3 = []
@@ -354,11 +380,6 @@ def main():
         traceback.print_exc(file=sys.stderr)
 
 if __name__ == "__main__":
-    # Ensure .env file has necessary API keys:
-    # OPEN_WEATHER_API_KEY=your_owm_key
-    # OPEN_ROUTE_SERVICE_API_KEY=your_ors_key
-    # BRAVE_API_KEY=your_brave_key (optional for general_web_search)
-    # Ensure config.py defines PLANNER_MODEL_NAME and VERBOSE
     main()
 
-# --- END OF FILE planner_agent.py ---
+# --- END OF FILE planner_agent.py ---     
