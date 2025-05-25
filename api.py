@@ -1,234 +1,275 @@
-from flask import Flask, request, Response, jsonify, send_from_directory
-from tools import general_web_search, extended_web_search, find_interesting_links, news_search, weather_search
-from flask_cors import CORS
-import json
 import os
+import json
+import tempfile
+from uuid import uuid4
+from datetime import datetime
+
+from flask import Flask, request, jsonify, Response, send_from_directory
+from flask_cors import CORS
+import portalocker  # pip install portalocker
+
+from tools import (
+    general_web_search,
+    extended_web_search,
+    find_interesting_links,
+    news_search,
+    weather_search,
+)
 from optimized_langchain_agent import OptimizedLangchainAgent
 from planner_agent import PlannerAgent
 
+# ---------------------------------------------------------------------------
+# 🌟 Helpers de concurrencia segura para conversations.json
+# ---------------------------------------------------------------------------
+BASE_DIR = os.getcwd()
+CONV_PATH = os.path.join(BASE_DIR, "conversations.json")
+LOCK_PATH = CONV_PATH + ".lock"  # Fichero de lock exclusivo
+
+
+def read_conversations():
+    """Carga el JSON completo de forma **atómica** y bajo lock de lectura."""
+    if not os.path.exists(CONV_PATH):
+        return {}
+
+    # 🔒 Bloqueo compartido ("r") ‑ mientras esté abierto nadie podrá escribir
+    with portalocker.Lock(LOCK_PATH, "r", timeout=10):
+        with open(CONV_PATH, "r", encoding="utf-8") as f:
+            text = f.read().strip()
+    return json.loads(text) if text else {}
+
+
+def write_conversations(data: dict):
+    """Escribe el JSON de forma **atómica**:
+    1. Bloqueo exclusivo.
+    2. Volcado a fichero temporal.
+    3. os.replace() => swap atómico.
+    """
+    os.makedirs(os.path.dirname(LOCK_PATH), exist_ok=True)
+    with portalocker.Lock(LOCK_PATH, "w", timeout=10):
+        fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(CONV_PATH))
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+            json.dump(data, tmp, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, CONV_PATH)
+
+
+# ---------------------------------------------------------------------------
+# Flask app
+# ---------------------------------------------------------------------------
 app = Flask(__name__)
 CORS(app)
 
-# Instancia global del agente, igual que en el ejemplo
-global_langchain_agent = OptimizedLangchainAgent(
-	tools=[general_web_search, find_interesting_links, news_search, weather_search, extended_web_search],
-	optimizations_enabled=False,
+# Agentes globales
+search_agent = OptimizedLangchainAgent(
+    tools=[general_web_search, find_interesting_links, news_search, weather_search, extended_web_search],
+    optimizations_enabled=False,
 )
-
-# Instancia global del agente de planificación exhaustiva
 planner_agent = PlannerAgent(verbose_agent=True)
 
-@app.route('/search', methods=['POST'])
+# ---------------------------------------------------------------------------
+# ENDPOINTS
+# ---------------------------------------------------------------------------
+
+
+@app.route("/search", methods=["POST"])
 def search():
-	data = request.get_json()
-	query = data.get('query')
-	chat_history = data.get('chat_history', [])
-	if not query:
-		return jsonify({'error': 'Missing query parameter'}), 400
-	from datetime import datetime
-	now = datetime.now()
-	today_str = now.strftime('%A, %d %B %Y')
-	time_str = now.strftime('%H:%M')
-	system_date = f"Today is {today_str}, and the current time is {time_str}."
-	prompt = (
-		f"{system_date}\n"
-		"Below is the conversation history between a user and an assistant. Use this context to answer coherently and relevantly in the user's language.\n"
-		"--- Conversation History ---\n"
-	)
-	for msg in chat_history:
-		if msg['role'] == 'user':
-			prompt += f"User: {msg['content']}\n"
-		elif msg['role'] == 'assistant':
-			prompt += f"Assistant: {msg['content']}\n"
-	prompt += ("--- End of History ---\n"
-			   "Now, this is the user prompt.\n"
-			   f"User: {query}\n")
-	def generate():
-		# Pass the original 'query' to run_layout
-		for token in global_langchain_agent.run_layout(prompt, user_original_query=query, empty_data_folders=False):
-			yield token
-	return Response(generate(), mimetype='text/plain')
+    data = request.get_json()
+    query = data.get("query")
+    chat_history = data.get("chat_history", [])
+    if not query:
+        return jsonify({"error": "Missing query parameter"}), 400
 
-# You can implement similar streaming for /news and /links if needed
-# For now, keep them as normal endpoints
-@app.route('/news', methods=['POST'])
-def news():
-	data = request.get_json()
-	query = data.get('query')
-	k = data.get('k', 5)
-	freshness = data.get('freshness')
-	if not query:
-		return jsonify({'error': 'Missing query parameter'}), 400
-	try:
-		result = news_search.invoke({'query': query, 'k': k, 'freshness': freshness})
-		return jsonify({'news': result})
-	except Exception as e:
-		return jsonify({'error': str(e)}), 500
+    # Inyectar fecha y hora en prompt
+    now = datetime.now()
+    system_date = (
+        f"Today is {now.strftime('%A, %d %B %Y')}, and the current time is {now.strftime('%H:%M')}."
+    )
 
-@app.route('/links', methods=['POST'])
-def links():
-	data = request.get_json()
-	query = data.get('query')
-	k = data.get('k', 5)
-	if not query:
-		return jsonify({'error': 'Missing query parameter'}), 400
-	try:
-		result = find_interesting_links.invoke({'query': query, 'k': k})
-		return jsonify({'links': result})
-	except Exception as e:
-		return jsonify({'error': str(e)}), 500
+    prompt = (
+        f"{system_date}\n"
+        "Below is the conversation history between a user and an assistant. "
+        "Use this context to answer coherently and relevantly in the user's language.\n"
+        "--- Conversation History ---\n"
+    )
+    for msg in chat_history:
+        role_prefix = "User" if msg["role"] == "user" else "Assistant"
+        prompt += f"{role_prefix}: {msg['content']}\n"
+    prompt += f"--- End of History ---\nNow, this is the user prompt.\nUser: {query}\n"
 
-@app.route('/plan', methods=['POST'])
+    # Streaming generator
+    def generate():
+        for token in search_agent.run_layout(prompt, user_original_query=query, empty_data_folders=False):
+            yield token
+
+    return Response(generate(), mimetype="text/plain")
+
+
+@app.route("/plan", methods=["POST"])
 def plan():
-	data = request.get_json()
-	query = data.get('query')
-	chat_history = data.get('chat_history', [])
-	if not query:
-		return jsonify({'error': 'Missing query parameter'}), 400
-	from datetime import datetime
-	today_str = datetime.now().strftime('%A, %d %B %Y')
-	# Inyecta la fecha como primer mensaje del historial
-	system_date_message = {'role': 'system', 'content': f'Today is {today_str}.'}
-	chat_history_with_date = [system_date_message] + chat_history
-	def generate():
-		# Get the iterator from the agent ONCE
-		agent_iterator = iter(planner_agent.run(query, chat_history=chat_history_with_date))
-		
-		# State flags
-		# Ensures we only attempt to strip an initial think block at the very beginning
-		initial_block_check_done = False 
-		# True if we are currently inside an initial <think>...</think> block
-		stripping_initial_think_block = False  
-		
-		buffer = "" # To accumulate tokens for checking <think> and </think>
+    data = request.get_json()
+    query = data.get("query")
+    chat_history = data.get("chat_history", [])
+    if not query:
+        return jsonify({"error": "Missing query parameter"}), 400
 
-		for token in agent_iterator:
-			if not initial_block_check_done:
-				# This phase is for handling the very start of the stream
-				
-				if not stripping_initial_think_block:
-					# We are not yet inside a think block.
-					# Check if the current token (plus any small preceding buffer) starts one.
-					# Using lstrip on the combined content to handle leading whitespace before <think>.
-					potential_start_content = (buffer + token).lstrip()
-					
-					if potential_start_content.startswith("<think>"):
-						stripping_initial_think_block = True
-						buffer += token # Accumulate the token that started/is part of <think>
-						
-						# Check if the block also ends within the currently buffered content
-						if "</think>" in buffer:
-							_, _, content_after_think = buffer.partition("</think>")
-							# This initial think block is now fully processed
-							initial_block_check_done = True 
-							stripping_initial_think_block = False # No longer stripping
-							buffer = "" # Clear buffer
-							if content_after_think.strip():
-								yield content_after_think # Yield content after the block
-						# If </think> not yet found, continue to the next token (outer loop)
-						# The buffer will hold the start of the <think> block.
-						
-					else:
-						# The stream does not start with <think> (or leading whitespace then <think>)
-						# Yield any content that was in buffer (e.g. if "<" was seen but not "<think>")
-						# and the current token.
-						if buffer: # Should typically be empty if we reach here unless "<" was partial
-							yield buffer
-						yield token
-						initial_block_check_done = True # Initial check phase is over
-						buffer = ""
-				
-				else: # stripping_initial_think_block is True
-					# We are inside an initial <think> block, accumulating tokens until </think>
-					buffer += token
-					if "</think>" in buffer:
-						_, _, content_after_think = buffer.partition("</think>")
-						initial_block_check_done = True
-						stripping_initial_think_block = False
-						buffer = ""
-						if content_after_think.strip():
-							yield content_after_think
-					# else, continue consuming the think block (next iteration of outer loop)
-			
-			else: # initial_block_check_done is True
-				# The initial <think> block (if any) has been processed, or there wasn't one.
-				# Yield all subsequent tokens directly.
-				yield token
-		
-		# After the loop, if the stream ended while still in the initial check phase
-		# and the buffer contains content that wasn't a <think> block.
-		if not initial_block_check_done and buffer:
-			if not buffer.lstrip().startswith("<think>"):
-				yield buffer
-			# If it was an unclosed <think> block, buffer is implicitly discarded (correct behavior)
-			
-	return Response(generate(), mimetype='text/plain')
+    system_msg = {
+        "role": "system",
+        "content": f"Today is {datetime.now().strftime('%A, %d %B %Y')}.",
+    }
+    chat_history_with_date = [system_msg] + chat_history
 
-@app.route('/images_list')
-def images_list():
-	# Devuelve la lista de archivos de la carpeta images
-	images_dir = os.path.join(os.getcwd(), 'images')
-	if not os.path.exists(images_dir):
-		return jsonify({'images': []})
-	files = [f for f in os.listdir(images_dir) if os.path.isfile(os.path.join(images_dir, f))]
-	# Opcional: filtra solo imágenes
-	images = [f for f in files if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp'))]
-	return jsonify({'images': images})
+    def generate():
+        iterator = iter(planner_agent.run(query, chat_history=chat_history_with_date))
 
-@app.route('/images/<path:filename>', methods=['GET', 'DELETE'])
-def serve_image(filename):
-	images_dir = os.path.join(os.getcwd(), 'images')
-	file_path = os.path.join(images_dir, filename)
-	if request.method == 'DELETE':
-		try:
-			if os.path.exists(file_path):
-				os.remove(file_path)
-				return '', 204
-			else:
-				return jsonify({'error': 'File not found'}), 404
-		except Exception as e:
-			return jsonify({'error': str(e)}), 500
-	return send_from_directory(images_dir, filename)
+        # ⚙️ Lógica para ignorar <think> inicial
+        stripping = True
+        buffer = ""
+        for token in iterator:
+            if stripping:
+                buffer += token
+                if "</think>" in buffer:
+                    _, _, after = buffer.partition("</think>")
+                    stripping = False
+                    if after.strip():
+                        yield after
+                    buffer = ""
+            else:
+                yield token
 
-@app.route('/conversations', methods=['GET', 'POST'])
+    return Response(generate(), mimetype="text/plain")
+
+
+# ------------- Conversaciones (JSON seguro) -------------
+
+
+@app.route("/conversations", methods=["GET", "POST"])
 def conversations():
-	file_path = os.path.join(os.getcwd(), 'conversations.json')
-	if request.method == 'GET':
-		if not os.path.exists(file_path):
-			return jsonify({})
-		try:
-			with open(file_path, 'r', encoding='utf-8') as f:
-				content = f.read().strip()
-				if not content:
-					return jsonify({})
-				data = json.loads(content)
-			return jsonify(data)
-		except Exception:
-			return jsonify({})
-	else:  # POST
-		data = request.get_json()
-		with open(file_path, 'w', encoding='utf-8') as f:
-			json.dump(data, f, ensure_ascii=False, indent=2)
-		return jsonify({"ok": True})
+    if request.method == "GET":
+        return jsonify(read_conversations())
+    # POST → sustituye TODO el JSON (sigue siendo usado por tu frontend)
+    data = request.get_json() or {}
+    write_conversations(data)
+    return jsonify({"ok": True})
 
-# Endpoint para obtener rutas de imágenes asociadas a un mensaje específico (opcional, granularidad por mensaje)
-@app.route('/images_for_message/<chat_id>/<int:msg_index>', methods=['GET'])
+
+@app.route("/conversation/new", methods=["POST"])
+def new_conversation():
+    body = request.get_json() or {}
+    name = body.get("name", "Sin nombre")
+
+    historico = read_conversations()
+    new_id = str(uuid4())
+    historico[new_id] = {"name": name, "messages": []}
+    write_conversations(historico)
+
+    return jsonify({"id": new_id, "name": name})
+
+
+@app.route("/conversation/add_message", methods=["POST"])
+def add_message():
+    body = request.get_json() or {}
+    chat_id = body.get("id")
+    message = body.get("message")
+    if not chat_id or not message:
+        return jsonify({"error": "Missing id or message"}), 400
+
+    historico = read_conversations()
+    if chat_id not in historico:
+        return jsonify({"error": "Chat not found"}), 404
+
+    historico[chat_id]["messages"].append(message)
+    write_conversations(historico)
+    return jsonify({"ok": True})
+
+
+@app.route("/conversation/delete", methods=["POST"])
+def delete_conversation():
+    body = request.get_json() or {}
+    chat_id = body.get("id")
+    if not chat_id:
+        return jsonify({"error": "Missing id"}), 400
+
+    historico = read_conversations()
+    if chat_id not in historico:
+        return jsonify({"error": "Chat not found"}), 404
+
+    del historico[chat_id]
+    write_conversations(historico)
+    return jsonify({"ok": True})
+
+
+# -------- Imágenes --------
+
+
+@app.route("/images_list")
+def images_list():
+    images_dir = os.path.join(BASE_DIR, "images")
+    if not os.path.exists(images_dir):
+        return jsonify({"images": []})
+    files = [f for f in os.listdir(images_dir) if os.path.isfile(os.path.join(images_dir, f))]
+    images = [f for f in files if f.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp"))]
+    return jsonify({"images": images})
+
+
+@app.route("/images/<path:filename>", methods=["GET", "DELETE"])
+def serve_image(filename):
+    images_dir = os.path.join(BASE_DIR, "images")
+    file_path = os.path.join(images_dir, filename)
+
+    if request.method == "DELETE":
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            return "", 204
+        return jsonify({"error": "File not found"}), 404
+
+    return send_from_directory(images_dir, filename)
+
+
+@app.route("/images_for_message/<chat_id>/<int:msg_index>")
 def images_for_message(chat_id, msg_index):
-	file_path = os.path.join(os.getcwd(), 'conversations.json')
-	if not os.path.exists(file_path):
-		return jsonify({'images': []})
-	with open(file_path, 'r', encoding='utf-8') as f:
-		data = json.load(f)
-	chat = data.get(chat_id)
-	if not chat:
-		return jsonify({'images': []})
-	messages = chat.get('messages', [])
-	if msg_index < 0 or msg_index >= len(messages):
-		return jsonify({'images': []})
-	images = messages[msg_index].get('images', [])
-	# Devuelve rutas completas para el frontend
-	image_paths = [f"/images/{img}" for img in images]
-	return jsonify({'images': image_paths})
+    historico = read_conversations()
+    chat = historico.get(chat_id, {})
+    messages = chat.get("messages", [])
+    if 0 <= msg_index < len(messages):
+        images = messages[msg_index].get("images", [])
+        full_paths = [f"/images/{img}" for img in images]
+        return jsonify({"images": full_paths})
+    return jsonify({"images": []})
 
-if __name__ == '__main__':
-	app.run(debug=True)
+
+# ---------------- Otros endpoints reutilizados ----------------
+
+
+@app.route("/news", methods=["POST"])
+def news():
+    data = request.get_json()
+    query = data.get("query")
+    k = data.get("k", 5)
+    freshness = data.get("freshness")
+    if not query:
+        return jsonify({"error": "Missing query parameter"}), 400
+    try:
+        result = news_search.invoke({"query": query, "k": k, "freshness": freshness})
+        return jsonify({"news": result})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/links", methods=["POST"])
+def links():
+    data = request.get_json()
+    query = data.get("query")
+    k = data.get("k", 5)
+    if not query:
+        return jsonify({"error": "Missing query parameter"}), 400
+    try:
+        result = find_interesting_links.invoke({"query": query, "k": k})
+        return jsonify({"links": result})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    # Si quieres eliminar threading por completo:
+    #   app.run(debug=True, threaded=False)
+    app.run(debug=True)
