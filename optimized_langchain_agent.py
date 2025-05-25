@@ -304,7 +304,7 @@ class OptimizedLangchainAgent:
 		if not agent_output_str and self.verbose_agent:
 			print("--- Agent Warning: self.run() produced an empty string output. ---", file=sys.stderr)
 		elif self.verbose_agent:
-			print(f"\n--- Agent Raw Output (to LayoutChat) ---\n{agent_output_str[:300]}...\n----------------------------------")
+			print(f"\n--- Agent Raw Output (to LayoutChat) ---\n{agent_output_str}\n----------------------------------")
 
 		# 3. Determine newly generated content images from IMAGES_DIR
 		current_content_img_files = self._get_image_files_in_dir(IMAGES_DIR)
