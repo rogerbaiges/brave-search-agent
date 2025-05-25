@@ -60,7 +60,8 @@ class OptimizedLangchainAgent:
 			"4.  **Link Citation:** ALWAYS include URLs for any web pages, news articles, or resources found by your tools. Use the format: [Descriptive Title](URL). Do not just list URLs; provide context.\n"
 			"5.  **Completeness over Brevity (for this stage):** Err on the side of including more relevant detail from tool results rather than less. The downstream AI will handle final summarization and presentation. Ensure all parts of the user's query are addressed with gathered data.\n"
 			"6.  **No Placeholder Links:** NEVER invent or add placeholder links or example domains. Only use actual, real links obtained from tool results. If more links are needed, use the appropriate tools. "
-			"7.  **Self-Correction/Refinement:** If initial tool calls are insufficient, identify gaps and make further tool calls to gather the missing information. Document this process if it occurs."
+			"7.  **IMPROTANT: Self-Correction/Refinement:** If initial tool calls are insufficient, identify gaps and make further tool calls to gather the missing information. Document this process if it occurs. ALWAYS keep seaching with different tools, queries and tool parameters until you have gathered enough relevant information to ansawer question." \
+	
 		)
 
 		self.tools = tools

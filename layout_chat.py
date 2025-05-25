@@ -44,7 +44,7 @@ class LayoutChat:
 		if html_output:
 			self.layout_system_prompt = (
 				"You are an expert creative assistant specializing in transforming provided text and image data into exceptionally well-structured, visually appealing, and engaging HTML content. Your output is the final product for the user.\n\n"
-				"**Primary Goal:** Reformat and enhance the given 'Main Content' to perfecly answer the user's query in a clear, scannable, and aesthetically pleasing way using semantic HTML **without adding any CSS** (classes, inline styles, or <style> blocks).\n\n"
+				"**Primary Goal:** Reformat and enhance the given 'Main Content' to perfecly answer the user's query in a clear, scannable, and aesthetically pleasing way using semantic HTML, without <style>.\n\n"
 				"**Core Instructions:**\n"
 				"1.  **Content Integrity:** Maintain all factual information from the 'Main Content'. Your role is presentation and enhancement, NOT new content generation or fact invention.\n"
 				"2.  **HTML Mastery:** Use only semantic HTML elements:\n"
@@ -57,7 +57,7 @@ class LayoutChat:
 				"    - Tables: `<table>`, `<thead>`, `<tbody>`, `<tr>`, `<th>`, `<td>`\n"
 				"    - Figures: `<figure>`, `<figcaption>`, `<img src=\"...\" alt=\"...\">`\n"
 				"    - Links: `<a href=\"...\">` (preserve any pre-verified URLs exactly as provided).\n"
-				"3.  **Structural Grouping (No Styling):** Use sectioning elements (`<section>`, `<article>`, `<div>`) only to group related content logically. **Do not output CSS classes or inline styles.**\n"
+				"3.  **Structural Grouping (No Styling):** Use sectioning elements (`<section>`, `<article>`, `<div>`) only to group related content logically. **Do not output any <styles> at all.**\n"
 				"4.  **Visual Flow and Readability:**\n"
 				"    - Break up long text into shorter `<p>` elements.\n"
 				"    - Use lists for steps or enumerations.\n"
@@ -66,6 +66,8 @@ class LayoutChat:
 				"5.  **Image Integration (If 'Content Images' are provided):**\n"
 				"    - Insert images with `<figure>` / `<figcaption>` where most relevant.\n"
 				"    - Do NOT invent image content; reference only provided images.\n"
+				"    - Analyze the content of the provided 'Content Images' to know where they fit best in the output."
+				"    - DO NOT use the text in the images as information to output. The images are only to visually improve the textual output, not to gather information from them using OCR.\n"
 				"6.  **Layout Inspiration Screenshots (If provided):** Use solely for structural ideas (e.g., grouping, ordering, layout). Do not copy any text or visual styles from them.\n"
 				"7.  **Link Handling:**\n"
 				"    - Preserve real Markdown-style links by converting them to `<a href=\"URL\">Descriptive Text</a>` exactly as given.\n"
@@ -220,7 +222,7 @@ class LayoutChat:
 						"type": "text",
 						"text": (
 							f"[Content Image {i+1}. Please embed with "
-							f'<img src=\"{IMAGES_DIR}/{web_ref}\" alt=\"Image {i+1}\">]'
+							f'<img src=\"src/assets/images/{web_ref}\" alt=\"Image {i+1}\">]'
 						)
 					})
 					processed_content_images +=1
