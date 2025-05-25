@@ -1,6 +1,7 @@
 import sys
 import base64
 import io
+import os
 from typing import List, Iterator, Union, Dict, Any
 
 from PIL import Image # For image handling
@@ -10,7 +11,7 @@ from langchain_ollama.chat_models import ChatOllama
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage, BaseMessage
 
 # Model names and verbose setting import
-from config import LAYOUT_MODEL, VERBOSE
+from config import LAYOUT_MODEL, VERBOSE, IMAGES_DIR
 
 # Removed: from optimized_langchain_agent import OptimizedLangchainAgent (no longer needed here)
 
@@ -43,10 +44,10 @@ class LayoutChat:
 		if html_output:
 			self.layout_system_prompt = (
 				"You are an expert creative assistant specializing in transforming provided text and image data into exceptionally well-structured, visually appealing, and engaging HTML content. Your output is the final product for the user.\n\n"
-				"**Primary Goal:** Reformat and enhance the given 'Main Content' to be clear, scannable, and aesthetically pleasing using semantic HTML and modern layout techniques.\n\n"
+				"**Primary Goal:** Reformat and enhance the given 'Main Content' so it is clear, scannable, and aesthetically pleasing using semantic HTML **without adding any CSS** (classes, inline styles, or <style> blocks).\n\n"
 				"**Core Instructions:**\n"
 				"1.  **Content Integrity:** Maintain all factual information from the 'Main Content'. Your role is presentation and enhancement, NOT new content generation or fact invention.\n"
-				"2.  **HTML Mastery:** Utilize a full range of semantic HTML elements for formatting:\n"
+				"2.  **HTML Mastery:** Use only semantic HTML elements:\n"
 				"    - Headings: `<h1>`, `<h2>`, `<h3>`, etc.\n"
 				"    - Paragraphs: `<p>`\n"
 				"    - Emphasis: `<strong>`, `<em>`\n"
@@ -56,28 +57,23 @@ class LayoutChat:
 				"    - Tables: `<table>`, `<thead>`, `<tbody>`, `<tr>`, `<th>`, `<td>`\n"
 				"    - Figures: `<figure>`, `<figcaption>`, `<img src=\"...\" alt=\"...\">`\n"
 				"    - Links: `<a href=\"...\">` (preserve any pre-verified URLs exactly as provided).\n"
-				"3.  **Layout & Styling:**\n"
-				"    - Use wrapper containers (e.g., `<div class=\"container\">`) and sectioning elements (`<section>`, `<article>`) to structure content.\n"
-				"    - Apply CSS classes or inline styles sparingly to ensure visual hierarchy (e.g., spacing, typography, color emphasis), but do not invent external stylesheet links unless provided.\n"
-				"    - Ensure responsive, mobile-friendly structure (e.g., flexible grids, media queries if inline CSS is used).\n"
+				"3.  **Structural Grouping (No Styling):** Use sectioning elements (`<section>`, `<article>`, `<div>`) only to group related content logically. **Do not output CSS classes or inline styles.**\n"
 				"4.  **Visual Flow and Readability:**\n"
-				"    - Break up long blocks of text into shorter `<p>` elements.\n"
-				"    - Use lists for enumerations and steps.\n"
-				"    - Employ headings and subheadings to create a clear hierarchy.\n"
-				"    - Use `<strong>` and `<em>` to highlight key terms or takeaways.\n"
+				"    - Break up long text into shorter `<p>` elements.\n"
+				"    - Use lists for steps or enumerations.\n"
+				"    - Employ headings to create a clear hierarchy.\n"
+				"    - Use `<strong>` and `<em>` sparingly for emphasis.\n"
 				"5.  **Image Integration (If 'Content Images' are provided):**\n"
-				"    - Reference images with `<figure>` and `<figcaption>`: e.g., `<figure><img src=\"...\" alt=\"...\"><figcaption>As seen in Content Image X, ...</figcaption></figure>`.\n"
-				"    - Do NOT invent image content. Only refer to what can be inferred from the provided images.\n"
-				"    - **Crucially, analyze the content of the provided 'Content Images' and integrate them coherently and semantically where they add the most value to the 'Main Content'. Choose only the most relevant images to display if many are provided.**\n"
-				"6.  **Layout Inspiration (If 'Layout Inspiration Screenshots' are provided):**\n"
-				"    - Observe structure, whitespace, typography scale, and layout patterns in the screenshots.\n"
-				"    - Apply similar HTML structure and class naming conventions for visual consistency, without copying any text from the inspiration.\n"
+				"    - Insert images with `<figure>` / `<figcaption>` where most relevant.\n"
+				"    - Do NOT invent image content; reference only provided images.\n"
+				"6.  **Layout Inspiration Screenshots (If provided):** Use solely for structural ideas (e.g., grouping, ordering). Do not copy any text or visual styles.\n"
 				"7.  **Link Handling - CRITICAL:**\n"
-				"    - Preserve any real Markdown-style links from the 'Main Content' by converting them to `<a href=\"URL\">Descriptive Text</a>` exactly as given.\n"
-				"    - Do NOT invent or generate any new URLs or placeholder links.\n    \n"
-				"8.  **Final Output Only:** Your entire response must be *only* the enhanced HTML layout. Do not include any preambles, apologies, self-corrections, or explanations of your process. Begin directly with the HTML markup of the formatted content and end with no additional commentary.\n"
-				"9.  **No Images/Layout Screenshots Provided:** If no 'Content Images' or 'Layout Inspiration Screenshots' are provided, focus solely on reformatting and enhancing the 'Main Content' text using semantic HTML best practices."
+				"    - Preserve real Markdown-style links by converting them to `<a href=\"URL\">Descriptive Text</a>` exactly as given.\n"
+				"    - Do NOT invent URLs or placeholder links.\n"
+				"8.  **Final Output Only:** Respond *only* with the enhanced HTML layout—no CSS, no explanations, no preambles.\n"
+				"9.  **No Images/Layout Screenshots Provided:** If none are supplied, focus solely on reorganizing and enhancing the 'Main Content' text.\n"
 			)
+
 		else: # Default markdown output
 			self.layout_system_prompt = (
 				"You are an expert creative assistant specializing in transforming provided text and image data into exceptionally well-structured, visually appealing, and engaging markdown content. Your output is the final product for the user.\n\n"
@@ -212,10 +208,19 @@ class LayoutChat:
 				mime_type = self._get_image_mime_type(image_input)
 				if base64_image:
 					human_message_content.append({
-						"type": "image_url",
-						"image_url": {"url": f"data:{mime_type};base64,{base64_image}"}
+						"type": "image",
+						"source_type": "base64",
+						"mime_type": mime_type,
+						"data": base64_image
 					})
-					human_message_content.append({"type": "text", "text": f"[Content Image {i+1} provided for context]"})
+					web_ref = os.path.basename(image_input)  # or any public URL you like
+					human_message_content.append({
+						"type": "text",
+						"text": (
+							f"[Content Image {i+1}. Please embed with "
+							f'<img src=\"{IMAGES_DIR}/{web_ref}\" alt=\"Image {i+1}\">]'
+						)
+					})
 					processed_content_images +=1
 				else:
 					if self.verbose: print(f"--- LayoutChat: Failed to encode content image {i+1} ---", file=sys.stderr)
