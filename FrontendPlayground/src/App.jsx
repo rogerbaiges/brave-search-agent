@@ -40,7 +40,6 @@ export default function BravePlayground() {
   const [imagesCleared, setImagesCleared] = useState(false);
   const [planningEnabled, setPlanningEnabled] = useState(false);
   const messagesEndRef = useRef(null)
-
   // --- NUEVOS ESTADOS PARA GESTIÓN DE CHATS ---
   const [historico, setHistorico] = useState({});
   const [chatId, setChatId] = useState(null);
@@ -50,6 +49,13 @@ export default function BravePlayground() {
   const [newChatName, setNewChatName] = useState('');
   const [renameChatId, setRenameChatId] = useState(null);
   const [renameChatName, setRenameChatName] = useState('');
+  // --- ESTADOS PARA NOTIFICACIONES ---
+  const [showCompletionNotification, setShowCompletionNotification] = useState(false);
+  const [completionMessage, setCompletionMessage] = useState('');
+  const [previousLoading, setPreviousLoading] = useState(false);
+  
+  // --- ESTADO PARA RASTREAR CHAT ACTIVO DURANTE OPERACIONES ---
+  const [activeChatId, setActiveChatId] = useState(null);
 
   /* --------------------------------------------------------------------
    *  EFFECTS
@@ -110,7 +116,6 @@ export default function BravePlayground() {
         setHistorico({});
       });
   }, []);
-
   // 5️⃣  Cuando cambia chatId ⇒ cargar mensajes y nombre
   useEffect(() => {
     if (chatId && historico[chatId]) {
@@ -122,9 +127,52 @@ export default function BravePlayground() {
     }
   }, [chatId, historico]);
 
+  // 6️⃣  Detectar cuando termina la carga para mostrar notificación
+  useEffect(() => {
+    // Si antes estaba cargando y ahora no, mostrar notificación
+    if (previousLoading && !loading) {
+      const message = planningEnabled ? 'Planificación completada ✨' : 'Búsqueda completada 🔍';
+      setCompletionMessage(message);
+      setShowCompletionNotification(true);
+      
+      // Auto-ocultar después de 3 segundos
+      setTimeout(() => {
+        setShowCompletionNotification(false);
+      }, 3000);
+    }
+    setPreviousLoading(loading);
+  }, [loading, previousLoading, planningEnabled]);
   /* --------------------------------------------------------------------
    *  HANDLERS DE CONVERSACIÓN (crear / renombrar / borrar)
    * ------------------------------------------------------------------*/
+  // Función mejorada para cambiar de chat que funciona durante la carga
+  function switchToChat(newChatId) {
+    console.log('🔄 Cambiando a chat:', newChatId, 'desde:', chatId);
+    
+    // Guardar mensajes actuales en el histórico antes de cambiar
+    if (chatId && messages.length > 0) {
+      setHistorico(prev => ({
+        ...prev,
+        [chatId]: {
+          ...prev[chatId],
+          messages: messages
+        }
+      }));
+    }
+    
+    // Cambiar al nuevo chat
+    setChatId(newChatId);
+    
+    // Si hay carga en progreso, mostrar indicador de que se cambió de conversación
+    if (loading) {
+      setCompletionMessage('Conversación cambiada durante la operación 🔄');
+      setShowCompletionNotification(true);
+      setTimeout(() => {
+        setShowCompletionNotification(false);
+      }, 2000);
+    }
+  }
+
   function openNewChatModal() {
     setNewChatName('');
     setShowNewChatModal(true);
@@ -204,9 +252,12 @@ export default function BravePlayground() {
         imagenesPreviasRef.current = data.images || [];
       });
   }, []);
-
   const handleSend = async () => {
     if (!input.trim()) return;
+
+    // Establecer el chat activo para esta operación
+    const currentChatId = chatId;
+    setActiveChatId(currentChatId);
 
     // Añadir mensaje usuario al estado & backend
     const userMsg = {
@@ -241,17 +292,38 @@ export default function BravePlayground() {
         endpoint: planningEnabled ? 'plan' : 'search',
         body: { query: userMsg.content, chat_history: chatHistory },
         onToken: async (token, done) => {
-          // Añadimos tokens progresivamente
-          setMessages(prev => {
-            const updated = [...prev];
-            const prevContent = updated[assistantIndex]?.content || '';
-            updated[assistantIndex] = {
-              ...updated[assistantIndex],
-              role: 'assistant',
-              content: prevContent + token.replace(prevContent, ''),
-            };
-            return updated;
-          });
+          // Añadimos tokens progresivamente SOLO si estamos en el chat original
+          if (chatId === currentChatId) {
+            setMessages(prev => {
+              const updated = [...prev];
+              const prevContent = updated[assistantIndex]?.content || '';
+              updated[assistantIndex] = {
+                ...updated[assistantIndex],
+                role: 'assistant',
+                content: prevContent + token.replace(prevContent, ''),
+              };
+              return updated;
+            });
+          } else {
+            // Si estamos en otro chat, actualizar el histórico del chat original
+            setHistorico(prev => {
+              const updated = { ...prev };
+              if (updated[currentChatId] && updated[currentChatId].messages) {
+                const messages = [...updated[currentChatId].messages];
+                const prevContent = messages[assistantIndex]?.content || '';
+                messages[assistantIndex] = {
+                  ...messages[assistantIndex],
+                  role: 'assistant',
+                  content: prevContent + token.replace(prevContent, ''),
+                };
+                updated[currentChatId] = {
+                  ...updated[currentChatId],
+                  messages
+                };
+              }
+              return updated;
+            });
+          }
 
           // Quitamos spinner al primer token
           if (!firstTokenReceived && token && !done) {
@@ -268,18 +340,38 @@ export default function BravePlayground() {
             );
             imagenesPreviasRef.current = data.images || [];
 
-            setMessages(prev => {
-              const updated = [...prev];
-              if (updated[assistantIndex]) {
-                updated[assistantIndex] = {
-                  ...updated[assistantIndex],
-                  images: nuevas,
-                };
-              }
-              return updated;
-            });
+            // Actualizar con imágenes en el lugar correcto
+            if (chatId === currentChatId) {
+              setMessages(prev => {
+                const updated = [...prev];
+                if (updated[assistantIndex]) {
+                  updated[assistantIndex] = {
+                    ...updated[assistantIndex],
+                    images: nuevas,
+                  };
+                }
+                return updated;
+              });
+            } else {
+              setHistorico(prev => {
+                const updated = { ...prev };
+                if (updated[currentChatId] && updated[currentChatId].messages && updated[currentChatId].messages[assistantIndex]) {
+                  const messages = [...updated[currentChatId].messages];
+                  messages[assistantIndex] = {
+                    ...messages[assistantIndex],
+                    images: nuevas,
+                  };
+                  updated[currentChatId] = {
+                    ...updated[currentChatId],
+                    messages
+                  };
+                }
+                return updated;
+              });
+            }
 
-            if (chatId) {
+            // Persistir en backend siempre con el chat original
+            if (currentChatId) {
               const assistantMsg = {
                 role: 'assistant',
                 content: (messages[assistantIndex]?.content || '') + token,
@@ -289,23 +381,41 @@ export default function BravePlayground() {
               fetch('http://localhost:5000/conversation/add_message', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ id: chatId, message: assistantMsg }),
+                body: JSON.stringify({ id: currentChatId, message: assistantMsg }),
               });
             }
+            
+            // Limpiar el chat activo
+            setActiveChatId(null);
           }
         },
       });
     } catch (error) {
-      setMessages(prev => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: 'Lo siento, se produjo un error.',
-          images: [],
-          timestamp: new Date().toISOString(),
-        },
-      ]);
+      // En caso de error, también actualizar el chat correcto
+      const errorMsg = {
+        role: 'assistant',
+        content: 'Lo siento, se produjo un error.',
+        images: [],
+        timestamp: new Date().toISOString(),
+      };
+      
+      if (chatId === currentChatId) {
+        setMessages(prev => [...prev, errorMsg]);
+      } else {
+        setHistorico(prev => {
+          const updated = { ...prev };
+          if (updated[currentChatId]) {
+            updated[currentChatId] = {
+              ...updated[currentChatId],
+              messages: [...(updated[currentChatId].messages || []), errorMsg]
+            };
+          }
+          return updated;
+        });
+      }
+      
       setLoading(false);
+      setActiveChatId(null);
     }
   };
 
@@ -521,7 +631,7 @@ export default function BravePlayground() {
                 <h1 className="text-2xl font-bold bg-gradient-to-r from-orange-400 to-orange-600 bg-clip-text text-transparent">
                   Brave Search
                 </h1>
-                <p className="text-xs text-gray-400">Búsqueda inteligente con IA</p>
+                <p className="text-xs text-gray-400">Intelligent AI Search</p>
               </div>
             </div>
 
@@ -535,7 +645,7 @@ export default function BravePlayground() {
                 </div>
                 <div>
                   <p className="text-sm font-medium text-white">Planning Mode</p>
-                  <p className="text-xs text-gray-400">Análisis avanzado</p>
+                  <p className="text-xs text-gray-400">Advanced Analysis</p>
                 </div>
               </div>
               <button
@@ -549,14 +659,13 @@ export default function BravePlayground() {
             </div>
           </div>
 
-          {/* Conversaciones */}
-          <div className="flex-1 overflow-auto p-4 relative">
+          {/* Conversaciones */}          <div className="flex-1 overflow-auto p-4 relative">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold text-gray-300">Conversaciones</h2>
+              <h2 className="text-sm font-semibold text-gray-300">Conversations</h2>
               <span className="text-xs text-gray-500 bg-gray-700/30 px-2 py-1 rounded-full">
                 {Object.keys(historico).length}
               </span>
-            </div>            <DragDropContext
+            </div><DragDropContext
               onDragEnd={result => {
                 if (!result.destination) return;
                 
@@ -597,7 +706,7 @@ export default function BravePlayground() {
                   console.log('✅ Backend confirmó actualización:', data);
                 })
                 .catch(error => {
-                  console.error('❌ Error actualizando orden en backend:', error);
+                  console.error('❌ Error updating order in backend:', error);
                 });
               }}
             >
@@ -616,7 +725,7 @@ export default function BravePlayground() {
                               className={`group relative p-3 rounded-xl cursor-pointer transition-all duration-200 hover:bg-gray-700/30 ${
                                 chat.id === chatId ? 'bg-gradient-to-r from-orange-500/10 to-orange-400/5 border border-orange-500/20' : 'hover:scale-[1.02]'
                               } ${snapshot.isDragging ? 'bg-gray-600/50 shadow-lg scale-105 rotate-2' : ''}`}
-                              onClick={() => setChatId(chat.id)}
+                              onClick={() => switchToChat(chat.id)}
                               style={{
                                 ...providedDraggable.draggableProps.style,
                                 opacity: snapshot.isDragging ? 0.8 : 1,
@@ -630,7 +739,7 @@ export default function BravePlayground() {
                                   <span
                                     className={`text-sm truncate ${chat.id === chatId ? 'text-orange-100 font-medium' : 'text-gray-300'}`}
                                   >
-                                    {chat.name || 'Sin nombre'}
+                                    {chat.name || 'Unnamed'}
                                   </span>
                                 </div>
                                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
@@ -640,7 +749,7 @@ export default function BravePlayground() {
                                       e.stopPropagation();
                                       openRenameModal(chat.id, chat.name);
                                     }}
-                                    title="Renombrar"
+                                    title="Rename"
                                   >
                                     <Edit3 size={12} />
                                   </button>
@@ -650,7 +759,7 @@ export default function BravePlayground() {
                                       e.stopPropagation();
                                       deleteChat(chat.id);
                                     }}
-                                    title="Eliminar"
+                                    title="Delete"
                                   >
                                     <Trash2 size={12} />
                                   </button>
@@ -677,7 +786,7 @@ export default function BravePlayground() {
               className="w-full p-3 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 rounded-xl text-white font-medium transition-all duration-200 hover:scale-105 shadow-lg flex items-center justify-center gap-2"
             >
               <Plus className="w-4 h-4" />
-              Nueva Conversación
+              New Conversation
             </button>
           </div>
         </div>
@@ -693,22 +802,21 @@ export default function BravePlayground() {
                 </h1>
               </div>
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-sm font-semibold text-gray-300">Conversaciones</h2>
+                <h2 className="text-sm font-semibold text-gray-300">Conversations</h2>
                 <button className="text-gray-400 hover:text-orange-400" onClick={() => setSidebarOpen(false)}>
                   <X size={16} />
                 </button>
-              </div>
-              <div className="space-y-2">
+              </div>              <div className="space-y-2">
                 {Object.entries(historico).map(([id, chat]) => (
                   <div
                     key={id}
                     className={`p-3 rounded-xl cursor-pointer transition-all duration-200 hover:bg-gray-700/30 ${id === chatId ? 'bg-gray-700/50' : ''}`}
                     onClick={() => {
-                      setChatId(id);
+                      switchToChat(id);
                       setSidebarOpen(false);
                     }}
                   >
-                    {chat.name || 'Sin nombre'}
+                    {chat.name || 'Unnamed'}
                   </div>
                 ))}
               </div>
@@ -911,9 +1019,8 @@ export default function BravePlayground() {
                       style={{ animationDelay: `${index * 100}ms` }}
                     >
                       <div className={`relative group ${message.role === 'user' ? 'max-w-xl' : 'max-w-4xl'}`}>
-                        {/* Message bubble with enhanced styling */}
-                        <div
-                          className={`relative p-6 mb-2 rounded-2xl shadow-xl whitespace-pre-line break-words transition-all duration-300 hover:scale-[1.01] ${
+                        {/* Message bubble with enhanced styling */}                        <div
+                          className={`relative p-6 mb-2 rounded-2xl shadow-xl whitespace-pre-line break-words transition-all duration-300 ${
                             message.role === 'user'
                               ? 'bg-gradient-to-br from-orange-500 via-orange-500 to-orange-600 text-white shadow-orange-500/20'
                               : 'bg-gray-800/80 backdrop-blur-xl text-orange-100 border border-gray-700/50 shadow-gray-900/50'
@@ -990,10 +1097,8 @@ export default function BravePlayground() {
                   );
                 })}
               </>
-            )}
-
-            {/* Loading indicator with enhanced animation */}
-            {loading && (
+            )}            {/* Loading indicator with enhanced animation - Solo mostrar si estamos en el chat activo */}
+            {loading && (activeChatId === null || activeChatId === chatId) && (
               <div className="flex justify-start animate-in slide-in-from-bottom-2 duration-300">
                 <div className="relative group">
                   <div className="max-w-2xl p-6 mb-2 rounded-2xl shadow-xl bg-gray-800/80 backdrop-blur-xl text-orange-100 border border-gray-700/50 flex items-center space-x-4">
@@ -1069,9 +1174,28 @@ export default function BravePlayground() {
                 </div>
               </div>
             </div>
-          )}
-        </div>
+          )}        </div>
       </div>
+      
+      {/* ➡️ NOTIFICACIÓN DE FINALIZACIÓN */}
+      {showCompletionNotification && (
+        <div className="fixed top-4 right-4 z-50 animate-in slide-in-from-right-2 duration-300">
+          <div className="bg-gray-800/95 backdrop-blur-xl border border-orange-400/50 rounded-xl p-4 shadow-2xl shadow-orange-500/20 flex items-center gap-3 max-w-sm">
+            <div className="p-2 bg-orange-500/20 rounded-lg">
+              <Bot className="w-5 h-5 text-orange-400" />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-sm font-medium text-white">{completionMessage}</span>
+            </div>
+            <button
+              onClick={() => setShowCompletionNotification(false)}
+              className="text-gray-400 hover:text-white transition-colors duration-200 ml-2"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+      )}
     </>
   );
 }
