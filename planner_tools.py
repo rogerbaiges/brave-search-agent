@@ -6,324 +6,401 @@ import requests
 import traceback
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote_plus # quote_plus for Google Maps link
+
+import math # For Haversine distance
 
 from langchain_core.tools import tool, ToolException
-from pydantic.v1 import BaseModel, Field # Using pydantic v1 for compatibility if needed
+from pydantic.v1 import BaseModel, Field
 
-# Tool imports for web search dependency
 from brave_search_api import BraveSearchManual
-# Config import
-from config import VERBOSE # Assuming VERBOSE is defined in config.py
+from config import VERBOSE
 
-# --- Load Environment Variables ---
 from dotenv import load_dotenv
 load_dotenv()
 
 OPEN_WEATHER_API_KEY = os.getenv("OPEN_WEATHER_API_KEY")
 OPEN_ROUTE_SERVICE_API_KEY = os.getenv("OPEN_ROUTE_SERVICE_API_KEY")
-BRAVE_API_KEY = os.getenv("BRAVE_API_KEY") # Needed for general_web_search
+BRAVE_API_KEY = os.getenv("BRAVE_API_KEY")
 
-# --- Helper Functions (Internal) ---
+# --- Helper for Haversine Distance (from planner_apis_example.py) ---
+def _haversine(lat1, lon1, lat2, lon2):
+    R = 6371
+    lat1_rad, lon1_rad, lat2_rad, lon2_rad = map(math.radians, [lat1, lon1, lat2, lon2])
+    dlon = lon2_rad - lon1_rad
+    dlat = lat2_rad - lat1_rad
+    a = math.sin(dlat / 2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
 
-# NEW: Helper to parse coordinate strings robustly
-def _parse_coordinates_from_string(loc_str: str) -> Optional[Tuple[float, float]]:
+# --- Corrected Geocoding Helper (from planner_apis_example.py) ---
+def _get_coordinates_owm_robust(location_str: str, api_key: Optional[str]) -> tuple[Optional[tuple[float, float]], str]:
     """
-    Tries to parse 'lat,lon' or 'lon,lat' string into (latitude, longitude) tuple.
-    Returns None if parsing fails or values are out of standard range.
+    Gets (latitude, longitude) for a location string.
+    Tries direct parsing, then OWM geocoding, with a fallback for "City, Country" formats.
+    Returns ((lat, lon), display_name_for_location) or (None, original_location_str) on failure.
     """
-    if ',' not in loc_str:
-        return None
-    parts = loc_str.split(',')
-    if len(parts) == 2:
+    if not api_key: # Added check for api_key for OWM geocoding
+        if VERBOSE: print(f"--- Planner Tools Error (_get_coordinates_owm_robust): OpenWeatherMap API Key not available. Cannot geocode '{location_str}' by name. ---", file=sys.stderr)
+        # Try direct parsing only if API key is missing
+        if ',' in location_str:
+            parts = location_str.split(',')
+            if len(parts) == 2:
+                try:
+                    val1, val2 = float(parts[0].strip()), float(parts[1].strip())
+                    is_val1_lat, is_val1_lon = -90 <= val1 <= 90, -180 <= val1 <= 180
+                    is_val2_lat, is_val2_lon = -90 <= val2 <= 90, -180 <= val2 <= 180
+                    if is_val1_lat and is_val2_lon: return (val1, val2), location_str
+                    if is_val1_lon and is_val2_lat: return (val2, val1), location_str
+                except ValueError: pass
+        return None, location_str
+
+
+    if not location_str or not location_str.strip():
+        if VERBOSE: print(f"--- Planner Tools Info (_get_coordinates_owm_robust): Invalid empty location string provided for '{location_str}'. ---", file=sys.stderr)
+        return None, location_str
+
+    if ',' in location_str:
+        parts = location_str.split(',')
+        if len(parts) == 2:
+            try:
+                val1, val2 = float(parts[0].strip()), float(parts[1].strip())
+                is_val1_lat, is_val1_lon = -90 <= val1 <= 90, -180 <= val1 <= 180
+                is_val2_lat, is_val2_lon = -90 <= val2 <= 90, -180 <= val2 <= 180
+                if is_val1_lat and is_val2_lon:
+                    if VERBOSE: print(f"--- Planner Tools Info (_get_coordinates_owm_robust): Parsed direct lat,lon for '{location_str}': ({val1}, {val2}) ---", file=sys.stderr)
+                    return (val1, val2), location_str
+                if is_val1_lon and is_val2_lat:
+                    if VERBOSE: print(f"--- Planner Tools Info (_get_coordinates_owm_robust): Parsed direct lon,lat for '{location_str}': ({val2}, {val1}) ---", file=sys.stderr)
+                    return (val2, val1), location_str
+            except ValueError:
+                pass
+
+    def _owm_geocode_attempt(query_str, original_input_for_error_msg):
+        geo_url = f"http://api.openweathermap.org/geo/1.0/direct?q={query_str}&limit=1&appid={api_key}"
         try:
-            val1 = float(parts[0].strip())
-            val2 = float(parts[1].strip())
-            # Check typical lat/lon ranges to infer order
-            is_val1_lat = -90 <= val1 <= 90
-            is_val1_lon = -180 <= val1 <= 180
-            is_val2_lat = -90 <= val2 <= 90
-            is_val2_lon = -180 <= val2 <= 180
+            response = requests.get(geo_url, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            if data and isinstance(data, list) and len(data) > 0 and 'lat' in data[0] and 'lon' in data[0]:
+                lat, lon = data[0]['lat'], data[0]['lon']
+                display_name = data[0].get('name', query_str)
+                country = data[0].get('country', '')
+                full_display_name = f"{display_name}, {country}" if country and country.strip() else display_name
+                if VERBOSE: print(f"--- Planner Tools Info (_get_coordinates_owm_robust): Geocoded '{query_str}' to: {full_display_name} ({lat:.4f}, {lon:.4f}) ---", file=sys.stderr)
+                return (lat, lon), full_display_name
+        except requests.exceptions.RequestException as e:
+            if VERBOSE: print(f"--- Planner Tools Warning (_get_coordinates_owm_robust): OWM Geocoding request failed for '{query_str}': {e} ---", file=sys.stderr)
+        except Exception as e:
+            if VERBOSE: print(f"--- Planner Tools Warning (_get_coordinates_owm_robust): Unexpected error during OWM geocoding for '{query_str}': {e} ---", file=sys.stderr)
+        return None, original_input_for_error_msg
 
-            if is_val1_lat and is_val2_lon: # Order is lat,lon
-                return val1, val2
-            elif is_val1_lon and is_val2_lat: # Order is lon,lat
-                 if VERBOSE: print(f"--- Planner Tools Info: Parsed '{loc_str}' as lon,lat. Storing as (lat,lon). ---", file=sys.stderr)
-                 return val2, val1 # Store consistently as (lat, lon)
-            elif is_val1_lat and is_val2_lat and is_val1_lon and is_val2_lon:
-                # Ambiguous case (e.g., 40, 40) - Assume lat,lon based on OWM common usage
-                if VERBOSE: print(f"--- Planner Tools Warning: Coordinate string '{loc_str}' is ambiguous (fits both lat,lon and lon,lat). Assuming lat,lon. ---", file=sys.stderr)
-                return val1, val2
-            else: # Values out of range
-                if VERBOSE: print(f"--- Planner Tools Warning: Parsed values from '{loc_str}' ({val1}, {val2}) fall outside standard lat/lon ranges. Cannot use. ---", file=sys.stderr)
-                return None
-        except ValueError:
-             # Failed to convert to float
-            return None
-    return None # Not two parts after split
+    coords, display_name = _owm_geocode_attempt(location_str.strip(), location_str)
+    if coords:
+        return coords, display_name
 
-# UPDATED: Geocoding helper using the new parser
-def _get_coordinates_owm(location: str, api_key: Optional[str]) -> Optional[Tuple[float, float]]:
-    """
-    Gets coordinates (latitude, longitude) for a location.
-    Tries parsing direct 'lat,lon' or 'lon,lat' first. If that fails,
-    attempts to geocode the location name using OpenWeatherMap.
-    Returns (latitude, longitude) tuple or None if resolution fails.
-    """
-    if not isinstance(location, str) or not location.strip():
-        if VERBOSE: print(f"--- Planner Tools Info: Invalid location input for coordinate resolution: '{location}' ---", file=sys.stderr)
-        return None
+    if ',' in location_str:
+        city_part = location_str.split(',')[0].strip()
+        if city_part and city_part.lower() != location_str.strip().lower():
+            if VERBOSE: print(f"--- Planner Tools Info (_get_coordinates_owm_robust): Geocoding for '{location_str}' failed, trying fallback with '{city_part}'... ---", file=sys.stderr)
+            coords, display_name = _owm_geocode_attempt(city_part, city_part)
+            if coords:
+                return coords, display_name
 
-    # 1. Try parsing as direct coordinates
-    parsed_coords = _parse_coordinates_from_string(location)
-    if parsed_coords:
-        if VERBOSE: print(f"--- Planner Tools: Using directly parsed coordinates for '{location}': {parsed_coords} (lat,lon) ---", file=sys.stderr)
-        return parsed_coords # Returns (lat, lon)
+    if VERBOSE: print(f"--- Planner Tools Warning (_get_coordinates_owm_robust): Could not find coordinates for '{location_str}' after all attempts. ---", file=sys.stderr)
+    return None, location_str
 
-    # 2. If not direct coordinates, proceed with geocoding (requires API key)
-    if not api_key:
-        print("--- Planner Tools Error: OpenWeatherMap API Key not configured. Cannot geocode city name '{location}'. ---", file=sys.stderr)
-        return None
-
-    # Use the original string for geocoding API, it's usually robust enough
-    city_name_to_geocode = location.strip()
-
-    geo_url = f"http://api.openweathermap.org/geo/1.0/direct?q={city_name_to_geocode}&limit=1&appid={api_key}"
-    try:
-        response = requests.get(geo_url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        if data and isinstance(data, list) and len(data) > 0 and 'lat' in data[0] and 'lon' in data[0]:
-            lat, lon = data[0]['lat'], data[0]['lon']
-            if VERBOSE: print(f"--- Planner Tools: Geocoded '{city_name_to_geocode}' to ({lat}, {lon}) ---", file=sys.stderr)
-            return lat, lon # Returns (lat, lon)
-        else:
-            if VERBOSE: print(f"--- Planner Tools Warning: OWM Geocoding found no results for '{city_name_to_geocode}'. Response: {data} ---", file=sys.stderr)
-            return None
-    except requests.exceptions.RequestException as e:
-        error_detail = e.response.text if e.response else str(e)
-        print(f"--- Planner Tools Error: OWM Geocoding request failed for '{city_name_to_geocode}': {e}. Detail: {error_detail[:200]}... ---", file=sys.stderr)
-        return None
-    except Exception as e:
-        print(f"--- Planner Tools Error: Unexpected error during OWM geocoding for '{city_name_to_geocode}': {e} ---", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
-        return None
 
 # --- Tool Definitions ---
 
-# 1. Weather Tool (No changes needed here)
+# 1. Weather Tool - MODIFIED
 class WeatherInput(BaseModel):
-    city: str = Field(description="The city name for which to get the weather forecast.")
-    days: int = Field(default=5, description="Number of days for the forecast (max 5 with this free API endpoint).")
+    city: str = Field(description="The city name for which to get the weather forecast. Can also be 'lat,lon' or 'lon,lat'.")
+    days: int = Field(default=5, description="Number of days for the forecast. If > 5, will provide typical weather info for the approximate future date using web search if available, alongside any available 5-day forecast.")
 
 @tool("get_weather_forecast_daily", args_schema=WeatherInput)
 def get_weather_forecast_daily(city: str, days: int = 5) -> str:
     """
-    Retrieves the daily weather forecast for a specified city for up to 5 days.
-    Requires the city name as input. It first attempts to find the geographical
-    coordinates (latitude, longitude) for the city using OpenWeatherMap's geocoding API.
-    If successful, it then uses these coordinates to fetch the 5-day forecast data
-    (provided in 3-hour intervals) from OpenWeatherMap.
-    The function processes this data to provide a daily summary including
-    temperature range (min/max Celsius), general weather description, and average wind speed.
-    Returns a string summarizing the forecast or an error message if coordinates
-    cannot be found or the forecast cannot be fetched.
+    Retrieves daily weather forecast. For up to 5 days, uses OpenWeatherMap API for detailed forecast
+    (temp range, feels like, precipitation chance, wind, description).
+    If 'days' is greater than 5, it provides the 5-day forecast AND attempts a general web search
+    for typical weather conditions for that city around the target future month/season.
+    The LLM should synthesize this information if typical weather is returned.
     """
     if not OPEN_WEATHER_API_KEY:
-        return "Error: OpenWeatherMap API Key is not configured. Cannot provide weather forecast."
+        return "Error: OpenWeatherMap API Key not configured. Cannot provide weather forecast."
 
-    coordinates = _get_coordinates_owm(city, OPEN_WEATHER_API_KEY) # Uses the improved helper
-    if not coordinates:
-        return f"Error: Could not retrieve coordinates for the city '{city}'. Please ensure it's a valid city name or format like 'lat,lon'."
+    coordinates_tuple, display_city_name = _get_coordinates_owm_robust(city, OPEN_WEATHER_API_KEY)
+    if not coordinates_tuple:
+        return f"Error: Could not retrieve valid coordinates for the location '{city}'. Please ensure it's a valid city name or coordinate format."
 
-    lat, lon = coordinates
-    days = min(max(1, days), 5)
+    lat, lon = coordinates_tuple
+    
+    today = datetime.now().date()
+    output_parts = []
+    
+    # Precise 5-day forecast part
+    days_for_api = min(days, 5) # OWM API limit
+    if days_for_api > 0 :
+        forecast_url = f"http://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={OPEN_WEATHER_API_KEY}&units=metric"
+        try:
+            forecast_response = requests.get(forecast_url, timeout=15)
+            forecast_response.raise_for_status()
+            forecast_data = forecast_response.json()
+            daily_summary = {}
+            target_dates = [today + timedelta(days=i) for i in range(days_for_api)]
 
-    forecast_url = f"http://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={OPEN_WEATHER_API_KEY}&units=metric"
-
-    try:
-        forecast_response = requests.get(forecast_url, timeout=15)
-        forecast_response.raise_for_status()
-        forecast_data = forecast_response.json()
-
-        daily_summary = {}
-        target_dates = [datetime.now().date() + timedelta(days=i) for i in range(days)]
-
-        for entry in forecast_data.get('list', []):
-            dt_txt = entry.get('dt_txt')
-            if not dt_txt: continue
-            try:
-                entry_datetime = datetime.strptime(dt_txt, '%Y-%m-%d %H:%M:%S')
+            for entry in forecast_data.get('list', []):
+                entry_datetime = datetime.strptime(entry['dt_txt'], '%Y-%m-%d %H:%M:%S')
                 entry_date = entry_datetime.date()
-            except ValueError:
-                continue
+                if entry_date not in target_dates: continue
 
-            if entry_date not in target_dates:
-                continue
+                if entry_date not in daily_summary:
+                    daily_summary[entry_date] = {'temps': [], 'feels_like': [], 'winds': [], 'precip_prob': [], 'descriptions': set()}
+                
+                daily_summary[entry_date]['temps'].append(entry['main']['temp'])
+                daily_summary[entry_date]['feels_like'].append(entry['main']['feels_like'])
+                daily_summary[entry_date]['winds'].append(entry['wind']['speed'])
+                daily_summary[entry_date]['precip_prob'].append(entry.get('pop', 0) * 100)
+                daily_summary[entry_date]['descriptions'].add(entry['weather'][0]['description'].capitalize())
 
-            temp = entry.get('main', {}).get('temp')
-            wind_speed = entry.get('wind', {}).get('speed')
-            description = entry.get('weather', [{}])[0].get('description', 'N/A')
+            if daily_summary:
+                output_parts.append(f"Detailed Weather Forecast for {display_city_name} (next {len(daily_summary)} day(s)):")
+                for date_obj in sorted(daily_summary.keys()):
+                    data = daily_summary[date_obj]
+                    min_t, max_t = (f"{min(data['temps']):.1f}", f"{max(data['temps']):.1f}") if data['temps'] else ('N/A','N/A')
+                    avg_fl = f"{sum(data['feels_like'])/len(data['feels_like']):.1f}" if data['feels_like'] else 'N/A'
+                    avg_w = f"{sum(data['winds'])/len(data['winds']):.1f} m/s" if data['winds'] else 'N/A'
+                    max_pp = f"{max(data['precip_prob']):.0f}%" if data['precip_prob'] else '0%'
+                    desc = ", ".join(sorted(list(data['descriptions']))) or 'N/A'
+                    output_parts.append(f"\n- {date_obj.strftime('%Y-%m-%d (%A')}:")
+                    output_parts.append(f"  Temp: {min_t}°C - {max_t}°C (Feels like avg: {avg_fl}°C)")
+                    output_parts.append(f"  Weather: {desc}")
+                    output_parts.append(f"  Precipitation Chance: ~{max_pp}")
+                    output_parts.append(f"  Avg Wind: {avg_w}")
+            else:
+                output_parts.append(f"No detailed forecast data processed for {display_city_name} for the next {days_for_api} days.")
 
-            if entry_date not in daily_summary:
-                daily_summary[entry_date] = {'temps': [], 'winds': [], 'descriptions': set()}
+        except requests.exceptions.RequestException as e:
+            output_parts.append(f"Error fetching detailed forecast: {e}")
+        except Exception as e:
+            if VERBOSE: traceback.print_exc(file=sys.stderr)
+            output_parts.append(f"Unexpected error processing detailed forecast: {e}")
 
-            if temp is not None: daily_summary[entry_date]['temps'].append(temp)
-            if wind_speed is not None: daily_summary[entry_date]['winds'].append(wind_speed)
-            daily_summary[entry_date]['descriptions'].add(description.capitalize())
+    # Long-range typical weather part
+    if days > 5:
+        output_parts.append(f"\nNote: Precise forecast for {display_city_name} beyond 5 days is not available via direct API.")
+        # Determine a representative future month for typical weather search
+        # For simplicity, take the midpoint of the requested period if it's far out, or just target month.
+        future_target_date = today + timedelta(days=days if days > 5 else 30) # Default to ~a month out if 'days' isn't super large
+        if days > 15 : # if asking for many days out, pick a date in the middle
+             future_target_date = today + timedelta(days=days//2)
 
-        if not daily_summary:
-            return f"Could not process forecast data for {city} for the specified dates. API might have returned empty or unexpected results."
+        target_month_year = future_target_date.strftime("%B %Y")
+        search_query = f"typical weather in {display_city_name} during {target_month_year}"
+        output_parts.append(f"Attempting to find typical weather for {display_city_name} around {target_month_year} using web search...")
+        
+        if brave_search_client_instance:
+            try:
+                # Call general_web_search tool directly (as this is Python code, not an LLM call)
+                # This assumes general_web_search is imported or accessible
+                web_search_result_str = general_web_search.invoke({"query": search_query, "count": 1})
+                # Parse the JSON string result from general_web_search
+                web_search_result_json = json.loads(web_search_result_str)
+                if web_search_result_json.get("results"):
+                    top_result = web_search_result_json["results"][0]
+                    typical_info = f"Typical weather (from web search - [Source: {top_result.get('url','N/A')}]): {top_result.get('title','N/A')} - {top_result.get('description','N/A')}. Please verify this general information."
+                    output_parts.append(typical_info)
+                else:
+                    output_parts.append(f"Web search for typical weather yielded no specific results. Please consult climate websites for {display_city_name} in {target_month_year}.")
+            except Exception as e_ws:
+                output_parts.append(f"Error during web search for typical weather: {e_ws}")
+        else:
+            output_parts.append("Web search tool for typical weather is not available.")
+            
+    if not output_parts: # Should not happen if coords were resolved.
+        return f"Error: No weather information could be generated for {city}."
+    return "\n".join(output_parts)
 
-        output_lines = [f"Weather Forecast for {city} (next {days} day(s)):"]
-        for date_obj in sorted(daily_summary.keys()):
-            data = daily_summary[date_obj]
-            min_temp_str = f"{min(data['temps']):.1f}" if data['temps'] else 'N/A'
-            max_temp_str = f"{max(data['temps']):.1f}" if data['temps'] else 'N/A'
-            avg_wind_str = f"{sum(data['winds']) / len(data['winds']):.1f} m/s" if data['winds'] else 'N/A'
-            weather_desc_str = ", ".join(sorted(list(data['descriptions']))) if data['descriptions'] else 'N/A'
 
-            output_lines.append(f"\n- {date_obj.strftime('%Y-%m-%d (%A')}:")
-            output_lines.append(f"  Temp: {min_temp_str}°C - {max_temp_str}°C")
-            output_lines.append(f"  Weather: {weather_desc_str}")
-            output_lines.append(f"  Avg Wind: {avg_wind_str}")
-
-        return "\n".join(output_lines)
-    except requests.exceptions.RequestException as e:
-        error_detail = e.response.text if e.response else str(e)
-        return f"Error: Failed to fetch weather forecast for {city}: {e}. Detail: {error_detail[:200]}..."
-    except Exception as e:
-        if VERBOSE: traceback.print_exc(file=sys.stderr)
-        return f"Error: An unexpected error occurred while processing forecast for {city}: {e}"
-
-
-# 2. Routing Tool (UPDATED to use improved coordinate resolution)
+# 2. Routing Tool - MODIFIED
 class RouteInput(BaseModel):
     locations: List[str] = Field(description="A list of two or more locations (city names or coordinates like 'latitude,longitude' or 'longitude,latitude') defining the route segments.")
+    # TODO_LLM_GUIDANCE: Add optional preferred_modes: List[str] = Field(default=None, description="Optional list of preferred modes (e.g., ['Car', 'Flight']). If provided, tool will focus on these.")
 
 @tool("plan_route_ors", args_schema=RouteInput)
 def plan_route_ors(locations: List[str]) -> str:
     """
-    Calculates route information (distance, duration) between a sequence of locations
-    using OpenRouteService (ORS). Takes a list of location strings. Each string can be
-    a city name (which will be geocoded via OpenWeatherMap) or coordinates
-    (parsed as 'lat,lon' or 'lon,lat').
-    For each segment between consecutive valid locations, it requests route data for
-    driving, cycling, and walking profiles from ORS.
-    Returns a string summarizing the route segments, including distance (km),
-    duration (min) for each mode, and indicates the recommended mode (shortest duration).
-    Requires at least two valid locations to be resolved.
+    Calculates route information between a sequence of locations using OpenRouteService (ORS) for land travel
+    and estimates for flights. Takes a list of location strings.
+    It provides viable transport modes (Car, Flight, Cycling, Walking) for each segment based on distance heuristics.
+    Cycling/Walking are only considered for shorter, land-based segments. Flights are estimated for long distances or
+    if car routes fail over significant distances (e.g., ocean crossings).
+    Returns a string summarizing each segment's viable modes with distance/duration, an overall trip summary
+    (total distance/time for primary modes), and a Google Maps link for visualization.
+    The LLM should synthesize this information, presenting all viable options per segment.
     """
-    if not OPEN_ROUTE_SERVICE_API_KEY:
-        return "Error: OpenRouteService API Key is not configured. Cannot plan route."
-    if not OPEN_WEATHER_API_KEY:
-        # Needed for geocoding city names if they are provided
-        if VERBOSE: print("--- Planner Tools Info: OpenWeatherMap API Key not configured. Will only work if all locations are provided as coordinates. ---", file=sys.stderr)
-        # Allow proceeding if coordinates are provided, but geocoding will fail
+    if not OPEN_ROUTE_SERVICE_API_KEY: return "Error: OpenRouteService API Key is not configured."
+    if not OPEN_WEATHER_API_KEY: # For geocoding
+        if VERBOSE: print("--- Planner Tools Info (plan_route_ors): OWM API Key missing, geocoding by name will fail if coords not direct. ---", file=sys.stderr)
+        # Allow to proceed if all locations are given as coords
 
     if not isinstance(locations, list) or len(locations) < 2:
-        return "Error: At least two locations (as a list of strings) are required to plan a route."
+        return "Error: At least two locations (as a list of strings) are required."
 
-    coordinates_list_for_ors = [] # Stores [lon, lat] for ORS API call
-    resolved_location_names_for_summary = [] # Keep original names for readability
-
-    for i, loc_input_str in enumerate(locations):
-        # Use the robust helper to get (latitude, longitude)
-        lat_lon_tuple = _get_coordinates_owm(loc_input_str, OPEN_WEATHER_API_KEY)
-
-        if lat_lon_tuple:
-            # ORS API expects coordinates in [longitude, latitude] order
-            ors_coord_pair = [lat_lon_tuple[1], lat_lon_tuple[0]]
-            coordinates_list_for_ors.append(ors_coord_pair)
-            # Use the original input string in the summary for clarity
-            resolved_location_names_for_summary.append(f"{loc_input_str} ({lat_lon_tuple[0]:.4f},{lat_lon_tuple[1]:.4f})")
+    resolved_loc_data = []
+    for loc_str in locations:
+        coords_tuple, display_name = _get_coordinates_owm_robust(loc_str, OPEN_WEATHER_API_KEY)
+        if coords_tuple:
+            ors_coords = [coords_tuple[1], coords_tuple[0]] # lon, lat for ORS
+            resolved_loc_data.append({'latlon': coords_tuple, 'gmaps_name': display_name, 'ors_coords': ors_coords, 'name_for_summary': display_name})
         else:
-            # If any location fails to resolve, stop planning the route
-            return f"Error: Could not resolve location '{loc_input_str}' (index {i}) to coordinates. Cannot plan the full route."
+            return f"Error: Could not resolve location '{loc_str}' to coordinates. Cannot plan full route."
 
-    # Should have at least two pairs of coordinates now if we reached here
-    if len(coordinates_list_for_ors) < 2:
-        return "Error: Less than two locations were successfully resolved to coordinates. Cannot plan route."
+    if len(resolved_loc_data) < 2: return "Error: Less than two locations successfully resolved."
 
-    profiles = {'driving-car': 'Car', 'cycling-regular': 'Cycling', 'foot-walking': 'Walking'}
-    base_ors_url = "https://api.openrouteservice.org/v2/directions/"
-    headers = {
-        'Authorization': OPEN_ROUTE_SERVICE_API_KEY,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json, application/geo+json, application/gpx+xml, img/png; charset=utf-8',
-    }
+    # Heuristics
+    MAX_DRIVING_KM_PRIMARY = 800
+    MIN_KM_FOR_FLIGHT = 300
+    MAX_CYCLING_KM_LAND = 200
+    MAX_WALKING_KM_LAND = 40
+    FLIGHT_SPEED_KMH = 800
+    FLIGHT_FIXED_HOURS = 3.0
 
-    segment_summaries_text = []
-    total_recommended_dist_km = 0.0
-    total_recommended_dur_min = 0.0
+    output_segments_text = ["Route Segment Analysis:"]
+    trip_segments_details_for_summary = []
+    overall_trip_primarily_flight = False
 
-    for i in range(len(coordinates_list_for_ors) - 1):
-        start_coord = coordinates_list_for_ors[i]
-        end_coord = coordinates_list_for_ors[i+1]
-        # Use the resolved names (which include coords now) for the summary
-        origin_name = resolved_location_names_for_summary[i]
-        dest_name = resolved_location_names_for_summary[i+1]
+    for i in range(len(resolved_loc_data) - 1):
+        start, end = resolved_loc_data[i], resolved_loc_data[i+1]
+        origin_name, dest_name = start['name_for_summary'], end['name_for_summary']
+        start_ors, end_ors = start['ors_coords'], end['ors_coords']
+        start_ll, end_ll = start['latlon'], end['latlon']
 
         segment_text = [f"\n--- Segment {i+1}: {origin_name} -> {dest_name} ---"]
-        segment_mode_details = {}
+        straight_dist_km = _haversine(start_ll[0], start_ll[1], end_ll[0], end_ll[1])
+        segment_text.append(f"  (Approx. straight-line distance: {straight_dist_km:.0f} km)")
 
-        for profile_key, profile_label in profiles.items():
-            url = f"{base_ors_url}{profile_key}"
-            body = {'coordinates': [start_coord, end_coord]}
+        current_segment_modes = {}
+        ors_car_ok = False
+        car_details = None
+
+        # Car
+        if straight_dist_km < MAX_DRIVING_KM_PRIMARY * 1.8:
             try:
-                response = requests.post(url, headers=headers, json=body, timeout=20)
-                response.raise_for_status()
-                data = response.json()
+                r = requests.post(f"https://api.openrouteservice.org/v2/directions/driving-car",
+                                  headers={'Authorization': OPEN_ROUTE_SERVICE_API_KEY, 'Content-Type': 'application/json'},
+                                  json={'coordinates': [start_ors, end_ors]}, timeout=15)
+                r.raise_for_status()
+                data = r.json()
                 if data.get('routes') and data['routes'][0].get('summary'):
-                    summary = data['routes'][0]['summary']
-                    dist_km = summary.get('distance', 0) / 1000
-                    dur_min = summary.get('duration', 0) / 60
-                    # Check for valid results (sometimes API returns 0 distance/duration)
-                    if dist_km > 0 or dur_min > 0:
-                        segment_mode_details[profile_label] = {'distance': dist_km, 'duration': dur_min}
-                        segment_text.append(f"  - {profile_label}: {dist_km:.2f} km, {dur_min:.1f} min")
-                    else:
-                        segment_text.append(f"  - {profile_label}: Route found but distance/duration is zero (check points/profile).")
-                        segment_mode_details[profile_label] = {'distance': None, 'duration': None}
-                else:
-                    segment_text.append(f"  - {profile_label}: Route not found or data incomplete for this mode.")
-                    segment_mode_details[profile_label] = {'distance': None, 'duration': None}
-            except requests.exceptions.RequestException as e_req:
-                err_detail = e_req.response.text if e_req.response else str(e_req)
-                status_code = e_req.response.status_code if e_req.response else 'N/A'
-                print(f"--- Planner Tools Error: ORS request failed for {profile_label} ({origin_name}->{dest_name}): Status {status_code}, Detail: {err_detail[:200]}... ---", file=sys.stderr)
-                segment_text.append(f"  - {profile_label}: API Error (Status: {status_code})")
-                segment_mode_details[profile_label] = {'distance': None, 'duration': None}
-            except Exception as e_exc:
-                print(f"--- Planner Tools Error: Unexpected ORS error for {profile_label} ({origin_name}->{dest_name}): {e_exc} ---", file=sys.stderr)
-                traceback.print_exc(file=sys.stderr)
-                segment_text.append(f"  - {profile_label}: Calculation Error")
-                segment_mode_details[profile_label] = {'distance': None, 'duration': None}
+                    s = data['routes'][0]['summary']
+                    dist, dur = s['distance']/1000, s['duration']/60
+                    segment_text.append(f"  Viable Mode: Car - {dist:.1f} km, {dur:.0f} min (~{dur/60:.1f} hrs)")
+                    current_segment_modes['Car'] = {'distance_km': dist, 'duration_min': dur}
+                    ors_car_ok = True
+                    car_details = current_segment_modes['Car']
+                else: segment_text.append("  Car: No ORS route found.")
+            except Exception as e: segment_text.append(f"  Car: ORS API error - {str(e)[:100]}")
+        else: segment_text.append(f"  Car: Not considered (distance {straight_dist_km:.0f} km > driving threshold).")
 
-        valid_modes = {m: d for m, d in segment_mode_details.items() if d.get('duration') is not None and d.get('distance') is not None}
-        recommended_mode = min(valid_modes, key=lambda m: valid_modes[m]['duration']) if valid_modes else None
+        # Flight
+        if straight_dist_km > MIN_KM_FOR_FLIGHT:
+            flight_h = (straight_dist_km / FLIGHT_SPEED_KMH) + FLIGHT_FIXED_HOURS
+            flight_m = flight_h * 60
+            segment_text.append(f"  Viable Mode: Flight (estimated) - Approx. {straight_dist_km:.0f} km, ~{flight_h:.1f} hrs ({flight_m:.0f} min) total. Check airlines.")
+            current_segment_modes['Flight'] = {'distance_km': straight_dist_km, 'duration_min': flight_m, 'is_estimated': True}
+            if not ors_car_ok or straight_dist_km > MAX_DRIVING_KM_PRIMARY or (car_details and flight_m < car_details['duration_min']):
+                overall_trip_primarily_flight = True
+        
+        # Cycling / Walking (only if car route was feasible for land check)
+        if ors_car_ok:
+            if straight_dist_km <= MAX_CYCLING_KM_LAND:
+                try: # Simplified cycling call
+                    r_cyc = requests.post(f"https://api.openrouteservice.org/v2/directions/cycling-regular", headers={'Authorization': OPEN_ROUTE_SERVICE_API_KEY}, json={'coordinates': [start_ors, end_ors]}, timeout=10)
+                    if r_cyc.status_code == 200 and r_cyc.json().get('routes'):
+                        s_cyc = r_cyc.json()['routes'][0]['summary']; d_c, dr_c = s_cyc['distance']/1000, s_cyc['duration']/60
+                        segment_text.append(f"  Viable Mode: Cycling - {d_c:.1f} km, {dr_c:.0f} min (~{dr_c/60:.1f} hrs)")
+                        current_segment_modes['Cycling'] = {'distance_km': d_c, 'duration_min': dr_c}
+                    else: segment_text.append("  Cycling: No ORS route.")
+                except: segment_text.append("  Cycling: ORS API error.")
+            elif straight_dist_km > MAX_CYCLING_KM_LAND:
+                segment_text.append(f"  Cycling: Not calculated (distance {straight_dist_km:.0f} km > threshold).")
 
-        if recommended_mode:
-            rec_info = segment_mode_details[recommended_mode]
-            segment_text.append(f"  -> Recommended: {recommended_mode} ({rec_info['distance']:.2f} km, {rec_info['duration']:.1f} min)")
-            total_recommended_dist_km += rec_info['distance']
-            total_recommended_dur_min += rec_info['duration']
-        else:
-            segment_text.append("  -> Recommended: None (no valid modes available for this segment)")
-        segment_summaries_text.extend(segment_text)
+            if straight_dist_km <= MAX_WALKING_KM_LAND:
+                try: # Simplified walking call
+                    r_walk = requests.post(f"https://api.openrouteservice.org/v2/directions/foot-walking", headers={'Authorization': OPEN_ROUTE_SERVICE_API_KEY}, json={'coordinates': [start_ors, end_ors]}, timeout=10)
+                    if r_walk.status_code == 200 and r_walk.json().get('routes'):
+                        s_walk = r_walk.json()['routes'][0]['summary']; d_w, dr_w = s_walk['distance']/1000, s_walk['duration']/60
+                        segment_text.append(f"  Viable Mode: Walking - {d_w:.1f} km, {dr_w:.0f} min (~{dr_w/60:.1f} hrs)")
+                        current_segment_modes['Walking'] = {'distance_km': d_w, 'duration_min': dr_w}
+                    else: segment_text.append("  Walking: No ORS route.")
+                except: segment_text.append("  Walking: ORS API error.")
+            elif straight_dist_km > MAX_WALKING_KM_LAND:
+                 segment_text.append(f"  Walking: Not calculated (distance {straight_dist_km:.0f} km > threshold).")
 
-    final_summary = ["Route Plan Summary:"] + segment_summaries_text
-    if total_recommended_dist_km > 0 or total_recommended_dur_min > 0 :
-        final_summary.append("\n--- Total Estimated Route (sum of recommended modes for successful segments) ---")
-        final_summary.append(f"  - Total Distance: {total_recommended_dist_km:.2f} km")
-        final_summary.append(f"  - Total Duration: {total_recommended_dur_min:.1f} min ({total_recommended_dur_min/60:.1f} hours)")
-    elif not segment_summaries_text: # Should not happen if initial checks pass, but as safety
-        return "Error: Could not calculate any route segments. Please check locations and API services."
+        if not current_segment_modes: segment_text.append("  No suitable transportation modes determined for this segment.")
+        
+        # Determine primary mode for summary totals
+        primary_mode_for_segment_total = None
+        if 'Flight' in current_segment_modes and (not ors_car_ok or straight_dist_km > MAX_DRIVING_KM_PRIMARY or (car_details and current_segment_modes['Flight']['duration_min'] < car_details['duration_min'])):
+            primary_mode_for_segment_total = 'Flight'
+        elif 'Car' in current_segment_modes: primary_mode_for_segment_total = 'Car'
+        elif 'Cycling' in current_segment_modes: primary_mode_for_segment_total = 'Cycling'
+        elif 'Walking' in current_segment_modes: primary_mode_for_segment_total = 'Walking'
 
-    return "\n".join(final_summary)
+        trip_segments_details_for_summary.append({
+            'origin': origin_name, 'destination': dest_name,
+            'viable_modes_data': current_segment_modes,
+            'primary_mode_for_total': primary_mode_for_segment_total
+        })
+        output_segments_text.extend(segment_text)
+
+    # Overall Summary
+    if trip_segments_details_for_summary:
+        output_segments_text.append("\n\n=== Overall Trip Summary ===")
+        total_dist, total_dur = 0,0
+        final_modes_set = set()
+        for seg in trip_segments_details_for_summary:
+            pm = seg['primary_mode_for_total']
+            if pm and pm in seg['viable_modes_data']:
+                total_dist += seg['viable_modes_data'][pm]['distance_km']
+                total_dur += seg['viable_modes_data'][pm]['duration_min']
+                final_modes_set.add(pm)
+        
+        modes_str = ", ".join(sorted(list(final_modes_set))) or "N/A"
+        output_segments_text.append(f"Total Estimated Trip Distance (primary modes: {modes_str}): {total_dist:.1f} km")
+        output_segments_text.append(f"Total Estimated Trip Duration (primary modes: {modes_str}): {total_dur:.0f} min (~{total_dur/60:.1f} hrs)")
+        
+        # Google Maps Link
+        gmaps_origin = quote_plus(resolved_loc_data[0]['gmaps_name'])
+        gmaps_dest = quote_plus(resolved_loc_data[-1]['gmaps_name'])
+        gmaps_params_dict = {"origin": gmaps_origin, "destination": gmaps_dest}
+        if len(resolved_loc_data) > 2:
+            gmaps_waypoints = "|".join([quote_plus(data['gmaps_name']) for data in resolved_loc_data[1:-1]])
+            gmaps_params_dict["waypoints"] = gmaps_waypoints
+        
+        gmaps_mode = "driving" # Default
+        if overall_trip_primarily_flight or "Flight" in final_modes_set: pass # No specific mode for Gmaps if flight involved
+        elif "Car" in final_modes_set: gmaps_mode = "driving"
+        elif "Cycling" in final_modes_set: gmaps_mode = "bicycling"
+        elif "Walking" in final_modes_set: gmaps_mode = "walking"
+        
+        if not (overall_trip_primarily_flight or "Flight" in final_modes_set):
+            gmaps_params_dict["travelmode"] = gmaps_mode
+            
+        gmaps_url = f"https://www.google.com/maps/dir/?api=1&{urlencode(gmaps_params_dict)}"
+        output_segments_text.append("\n--- Google Maps Link for Visualization ---")
+        output_segments_text.append("Note: This link provides a general route. For flights, check airline websites.")
+        output_segments_text.append(gmaps_url)
+
+    elif not trip_segments_details_for_summary and len(locations) >=2:
+         output_segments_text.append("\nNo route segments could be planned with the provided locations.")
+    
+    return "\n".join(output_segments_text)
 
 
-# 3. General Web Search Tool (using Brave) - No changes needed here
+# 3. General Web Search Tool (using Brave) - Kept identical
 brave_search_client_instance = None
 if BRAVE_API_KEY:
     try:
@@ -362,8 +439,7 @@ def general_web_search(query: str, count: int = 3) -> str:
         if VERBOSE: traceback.print_exc(file=sys.stderr)
         return f"Error: An unexpected error occurred during web search: {e_exc}"
 
-
-# 4. Placeholder/Simulated Tools (Corrected invoke call)
+# 4. Operational Details Tool - Kept identical
 class OperationalDetailsInput(BaseModel):
     place_name: str = Field(description="The name of the place (e.g., museum, restaurant, shop).")
     location: str = Field(description="The city or general area where the place is located.")
@@ -372,31 +448,32 @@ class OperationalDetailsInput(BaseModel):
 def get_operational_details(place_name: str, location: str) -> str:
     """
     (Simulated) Attempts to find operational details like address and opening hours for a specific place.
-    Ideally, this would use a dedicated 'Places' API, but currently relies on general web search
-    or returns a simulated response. Ask the user to verify the information.
+    Currently relies on `general_web_search`. Results require user verification.
+    The LLM should clearly state that details found this way need to be confirmed by the user from official sources.
     """
-    if VERBOSE: print(f"--- Planner Tools: Simulating 'get_operational_details' for {place_name} in {location} ---", file=sys.stderr)
+    if VERBOSE: print(f"--- Planner Tools: 'get_operational_details' for {place_name} in {location} using web search ---", file=sys.stderr)
     if brave_search_client_instance:
-        search_query = f"opening hours and address for {place_name} in {location}"
+        search_query = f"official opening hours and address for {place_name} in {location}"
         try:
-            # Use .invoke() with a dictionary matching the WebSearchInput schema
-            search_result = general_web_search.invoke({"query": search_query, "count": 1})
-
-            if "Error:" not in search_result and "No web search results found" not in search_result:
-                 # Return search results but remind user to verify
-                 return f"Found potential details via web search for '{place_name} in {location}' (Please verify these details as they are from a general search and may not be precise):\n{search_result}\n[End of Search Result]"
+            search_result_str = general_web_search.invoke({"query": search_query, "count": 1})
+            search_result_json = json.loads(search_result_str) # general_web_search returns JSON string
+            
+            if search_result_json.get("results"):
+                 top_result = search_result_json["results"][0]
+                 return (f"Potential details for '{place_name} in {location}' (from web search - VERIFY EXTERNALLY):\n"
+                         f"Title: {top_result.get('title', 'N/A')}\n"
+                         f"URL: {top_result.get('url', 'N/A')}\n"
+                         f"Snippet: {top_result.get('description', 'N/A')}\n"
+                         f"[IMPORTANT: User must verify this information from official sources as it's from a general web search.]")
+            elif search_result_json.get("error"):
+                return f"Could not get operational details: Web search error: {search_result_json.get('error')}"
             else:
-                 if VERBOSE: print(f"--- Planner Tools: Web search fallback for operational details failed or yielded no results. Reason: {search_result} ---", file=sys.stderr)
-                 # Fall through to placeholder if search failed
+                 return f"Could not find specific operational details for '{place_name} in {location}' via web search. Please try a more specific search or check official websites. [User verification required]"
         except Exception as e_invoke:
-             print(f"--- Planner Tools Error: Failed to invoke general_web_search within get_operational_details: {e_invoke} ---", file=sys.stderr)
-             # Fall through to placeholder
+             return f"Error invoking web search for operational details: {e_invoke}. [User verification required]"
+    return f"Web search tool unavailable. Cannot fetch operational details for '{place_name} in {location}'. Please search manually. [User verification required]"
 
-    # Placeholder response if web search is unavailable or failed
-    return f"Placeholder/Simulated response for '{place_name}' in '{location}'. Specific operational details (hours, address) could not be reliably fetched via available tools. Please search for this information online or assume standard business hours (e.g., 9 AM - 5 PM weekdays) and verify externally. [User verification required]"
-
-
-# 5. Calendar Tool
+# 5. Calendar Tool - Kept identical
 class CalendarEventInput(BaseModel):
     summary: str = Field(description="The title or summary of the event.")
     start_datetime: str = Field(description="Start date and time in 'YYYY-MM-DD HH:MM:SS' format (local time). This is REQUIRED.")
@@ -405,7 +482,6 @@ class CalendarEventInput(BaseModel):
     description: Optional[str] = Field(default="", description="Description or notes for the event. Optional.")
 
 def _format_datetime_for_google(dt_str: str) -> str:
-    """Helper to format datetime string to YYYYMMDDTHHMMSS."""
     try:
         dt_obj = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
         return dt_obj.strftime("%Y%m%dT%H%M%S")
@@ -428,27 +504,27 @@ def add_calendar_event(summary: str, start_datetime: str, end_datetime: Optional
 
     Returns a success message with the Google Calendar URL or an error message if inputs are invalid.
     """
-    if VERBOSE: print(f"--- Planner Tools: Generating Google Calendar link for: {summary} from {start_datetime} to {end_datetime} ---", file=sys.stderr)
+    if VERBOSE: print(f"--- Planner Tools: Generating Google Calendar link for: {summary} from {start_datetime} to {end_datetime if end_datetime else ' (1hr default)'} ---", file=sys.stderr)
+    
+    final_end_datetime = end_datetime
     if end_datetime is None or not end_datetime.strip():
         if VERBOSE: print("--- Planner Tools Info: 'end_datetime' not provided or empty. Assuming a default duration of 1 hour. ---", file=sys.stderr)
         try:
             start_dt_obj_for_default = datetime.strptime(start_datetime, "%Y-%m-%d %H:%M:%S")
-            end_datetime = (start_dt_obj_for_default + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
-            if VERBOSE: print(f"--- Planner Tools Info: Calculated end_datetime: {end_datetime} ---", file=sys.stderr)
+            final_end_datetime = (start_dt_obj_for_default + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+            if VERBOSE: print(f"--- Planner Tools Info: Calculated end_datetime: {final_end_datetime} ---", file=sys.stderr)
         except ValueError:
             return "Error: Invalid 'start_datetime' format. Cannot calculate default end_datetime. Please provide 'start_datetime' in 'YYYY-MM-DD HH:MM:SS' format."
-    elif not end_datetime.strip():
-         return "Error: 'end_datetime' was provided as an empty string. Please provide a valid datetime or omit it for a 1-hour default duration."
-
+    
     try:
         start_dt_obj = datetime.strptime(start_datetime, "%Y-%m-%d %H:%M:%S")
-        end_dt_obj = datetime.strptime(end_datetime, "%Y-%m-%d %H:%M:%S")
+        end_dt_obj = datetime.strptime(final_end_datetime, "%Y-%m-%d %H:%M:%S")
 
         if end_dt_obj <= start_dt_obj:
-            return f"Error: end_datetime ({end_datetime}) must be after start_datetime ({start_datetime})."
+            return f"Error: end_datetime ({final_end_datetime}) must be after start_datetime ({start_datetime})."
 
-        google_start = _format_datetime_for_google(start_datetime) # Assuming _format_datetime_for_google is defined
-        google_end = _format_datetime_for_google(end_datetime)
+        google_start = _format_datetime_for_google(start_datetime)
+        google_end = _format_datetime_for_google(final_end_datetime)
 
         params = {
             "action": "TEMPLATE",
@@ -472,21 +548,11 @@ def add_calendar_event(summary: str, start_datetime: str, end_datetime: Optional
         return f"Error: Could not generate calendar link. Details: {e}"
 
 # --- List of tools for the agent ---
-# Define the potential list
-planner_tools_list = [
+active_planner_tools = [
     get_weather_forecast_daily,
     plan_route_ors,
     get_operational_details,
     add_calendar_event,
-    general_web_search # Will only work if brave_search_client_instance is not None
-]
-
-# Filter out general_web_search if the client isn't ready
-active_planner_tools = [
-    get_weather_forecast_daily,
-    plan_route_ors,
-    get_operational_details, # Simulated, always "active"
-    add_calendar_event,      # Simulated, always "active"
 ]
 if brave_search_client_instance:
     active_planner_tools.append(general_web_search)
@@ -494,41 +560,36 @@ else:
     if VERBOSE: print("--- Planner Tools: `general_web_search` tool is NOT active due to client initialization failure or missing API key. ---", file=sys.stderr)
 
 
-# --- Testing Block ---
+# --- Testing Block (Optional) ---
 if __name__ == '__main__':
     print("--- Testing Planner Tools (ensure .env has API keys) ---")
+    
+    # Test Weather
+    # print("\nTesting Weather (Paris, 2 days):")
+    # print(get_weather_forecast_daily.invoke({"city": "Paris", "days": 2}))
+    # print("\nTesting Weather (London, 7 days - should trigger typical weather search):")
+    # print(get_weather_forecast_daily.invoke({"city": "London", "days": 7}))
 
-    # Test Coordinate Parsing and Geocoding Helper
-    # print("\nTesting Coordinate Resolution:")
-    # print(f"  'Paris': {_get_coordinates_owm('Paris', OPEN_WEATHER_API_KEY)}")
-    # print(f"  'Barcelona, Spain': {_get_coordinates_owm('Barcelona, Spain', OPEN_WEATHER_API_KEY)}") # Should geocode 'Barcelona'
-    # print(f"  '48.8566,2.3522': {_get_coordinates_owm('48.8566,2.3522', OPEN_WEATHER_API_KEY)}") # lat,lon
-    # print(f"  '2.3522, 48.8566': {_get_coordinates_owm('2.3522, 48.8566', OPEN_WEATHER_API_KEY)}") # lon,lat
-    # print(f"  'InvalidCity123': {_get_coordinates_owm('InvalidCity123', OPEN_WEATHER_API_KEY)}")
-    # print(f"  '999,999': {_get_coordinates_owm('999,999', OPEN_WEATHER_API_KEY)}") # Out of range
-
-    # Test Routing with different inputs
-    print("\nTesting Routing:")
-    print("  Route: London -> Paris")
+    # Test Routing
+    print("\nTesting Routing (London to Paris):")
     print(plan_route_ors.invoke({"locations": ["London", "Paris"]}))
-    # print("\n  Route: Barcelona -> Girona (using names)")
-    # print(plan_route_ors.invoke({"locations": ["Barcelona", "Girona"]}))
-    # print("\n  Route: Barcelona -> Girona (using 'City, Country')")
-    # print(plan_route_ors.invoke({"locations": ["Barcelona, Spain", "Girona, Spain"]})) # Should now work
-    # print("\n  Route: NYC (lat,lon) -> LA (lat,lon)")
-    # print(plan_route_ors.invoke({"locations": ["40.7128,-74.0060", "34.0522,-118.2437"]}))
+    print("\nTesting Routing (Barcelona to Madrid to Lisbon):")
+    print(plan_route_ors.invoke({"locations": ["Barcelona", "Madrid", "Lisbon"]}))
+    print("\nTesting Routing (Madrid to Gran Canaria - should suggest flight):")
+    print(plan_route_ors.invoke({"locations": ["Madrid", "Gran Canaria"]}))
 
-    # Test Operational Details (Simulated with fixed invoke)
+
+    # Test Operational Details
     # print("\nTesting Operational Details (Eiffel Tower, Paris):")
     # print(get_operational_details.invoke({"place_name": "Eiffel Tower", "location": "Paris"}))
 
-    # Test Calendar Add (Simulated)
-    # print("\nTesting Add Calendar Event (Valid):")
-    # print(add_calendar_event.invoke({"summary": "Meeting", "start_datetime": "2024-12-01 10:00:00"}))
-    # print("\nTesting Add Calendar Event (Invalid Date Format):")
-    # print(add_calendar_event.invoke({"summary": "Meeting", "start_datetime": "01-12-2024 10:00"}))
-    # print("\nTesting Add Calendar Event (End before Start):")
-    # print(add_calendar_event.invoke({"summary": "Meeting", "start_datetime": "2024-12-01 10:00:00", "end_datetime": "2024-12-01 09:00:00"}))
+    # Test Calendar
+    # print("\nTesting Calendar Event (Meeting):")
+    # print(add_calendar_event.invoke({"summary": "Team Meeting", "start_datetime": "2025-06-10 14:00:00", "end_datetime": "2025-06-10 15:30:00", "location": "Office"}))
+    # print("\nTesting Calendar Event (Lunch - default duration):")
+    # print(add_calendar_event.invoke({"summary": "Lunch with Client", "start_datetime": "2025-06-11 12:30:00"}))
+
 
     print(f"\n--- Active planner tools available for import ({len(active_planner_tools)}): {[t.name for t in active_planner_tools]} ---")
+
 # --- END OF FILE planner_tools.py ---

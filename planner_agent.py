@@ -299,6 +299,13 @@ def main():
         sat_str = next_saturday.strftime('%Y-%m-%d')
         sun_str = next_sunday.strftime('%Y-%m-%d')
 
+        task15 = "I want to plan a weekend trip to Paris for the upcoming weekend. "
+        print(separator + f"Calculating next Saturday ({sat_str}) and Sunday ({sun_str}) dates..." + separator)
+        history15 = []
+        for token in planner.run(task15, chat_history=history15):
+            print(token, end="", flush=True)
+        print(separator)
+
         task2 = (f"I want to plan a weekend trip to Paris for the upcoming weekend ({sat_str} to {sun_str}). "
                  f"Can you suggest an itinerary including travel from London? Check the weather for Paris on those dates, "
                  f"find opening hours for the Eiffel Tower, and add a placeholder event to my calendar for visiting it "
