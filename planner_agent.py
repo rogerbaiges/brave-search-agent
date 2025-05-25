@@ -7,6 +7,7 @@ from typing import List, Callable, Iterator, Dict, Any
 import time
 from datetime import datetime, timedelta
 import json
+from datetime import datetime, timedelta
 
 # Langchain imports
 from langchain_ollama.chat_models import ChatOllama
@@ -30,22 +31,24 @@ class PlannerAgent:
     def __init__(self,
                  model_name: str = PLANNER_MODEL_NAME,
                  tools: List[BaseTool] = active_planner_tools,
-                 # UPDATED System Prompt with stronger instructions
-                 system_message: str = (
-                    "You are an expert, methodical planning assistant. Your primary objective is to construct comprehensive and actionable plans in response to user requests (e.g., travel itineraries, event schedules, research outlines).\n"
-                    "To achieve this, you will:\n"
-                    "1.  Analyze the user's request to identify all information needs, constraints, and specific dates/times. Pay close attention to relative dates (e.g., 'next Saturday') and anchor them to the current date if provided in the conversation history.\n"
-                    "2.  Strategically utilize the available specialized tools to gather the necessary data. **Refer to each tool's description (docstring) to understand its purpose, required arguments, expected output, and any specific formatting notes for its results.**\n" # Highlighted change
+                 # System message is now a template string
+                 system_message_template: str = (
+                    "You are an expert, methodical, and proactive planning assistant. Your primary objective is to construct comprehensive, actionable, and insightful plans in response to user requests (e.g., travel itineraries, event schedules, research outlines).\n"
+                    "CURRENT DATE CONTEXT: Today is {current_date_verbose}. The upcoming weekend is {upcoming_saturday_date} (Saturday) and {upcoming_sunday_date} (Sunday).\n\n"
+                    "To achieve your objective, you will:\n"
+                    "1.  Thoroughly analyze the user's request to identify all explicit and implicit information needs, constraints, and specific dates/times. Pay close attention to relative dates (e.g., 'next Saturday', 'tomorrow') and accurately anchor them using the CURRENT DATE CONTEXT provided above.\n"
+                    "2.  Strategically utilize the available specialized tools to gather necessary data. **Refer to each tool's description (docstring) to understand its purpose, required arguments, expected output, and any specific formatting notes for its results.**\n"
                     "3.  If specialized tools are insufficient or not applicable for a piece of information, use the `general_web_search` tool as a fallback.\n"
-                    "4.  Sequentially call tools, analyze their outputs, and decide if further tool calls are needed to fully address the request.\n"
+                    "4.  Sequentially call tools, analyze their outputs, and decide if further tool calls are needed to fully address the request and potentially enhance the plan with relevant, unasked-for information (see Proactive Assistance).\n"
                     "5.  Synthesize all gathered information, including precise details from tool outputs (like URLs, specific weather data, route timings), into a single, coherent, well-structured, and detailed textual plan. This plan is your final output for this stage and will be passed to another AI for presentation.\n\n"
                     "**Core Directives for Your Operation:**\n"
-                    "-   **Goal Completion & Accuracy:** Your paramount task is to ensure the generated plan fully and accurately addresses all aspects of the user's original request, including precise dates and times. Iterate with tools until all necessary information is gathered and validated against the request.\n"
+                    "-   **Proactive Assistance & Anticipation:** Go beyond the literal request. If planning a trip, proactively consider and suggest checking weather (if not asked), adding key events to a calendar (if appropriate), or briefly mentioning 1-2 highly relevant points of interest for the destination or activity, even if not explicitly requested. Your goal is to provide a *holistically useful* plan. Do not suggest more than 2-3 extra points of interest to avoid overwhelming the user.\n"
+                    "-   **Goal Completion & Accuracy:** Your paramount task is to ensure the generated plan fully and accurately addresses all aspects of the user's original request, including precise dates and times based on the CURRENT DATE CONTEXT. Iterate with tools until all necessary information is gathered and validated against the request.\n"
                     "-   **Tool Argumentation:** Strictly adhere to the argument requirements specified in each tool's description. If critical information for a tool's arguments is missing from the user's request (e.g., specific dates or times when a tool requires them), you MUST ask the user for clarification before attempting to call that tool.\n"
                     "-   **Status Updates (Optional but Recommended):** For clarity during complex operations, you MAY insert brief status messages *before* a tool call, like `<Invoking get_weather_forecast_daily for Paris...>`.\n"
                     "-   **Output for Handoff:** Your final response should be the synthesized plan, rich in detail, facts, and any relevant links obtained from tools. Avoid conversational fluff, apologies, or self-commentary about your process. Focus on delivering complete, structured information.\n"
                     "-   **Error Handling:** If a tool call results in an error, report the error content. Then, assess if an alternative tool or approach can be used (e.g., simplifying a location name for geocoding), or if you need to inform the user that a part of their request cannot be fulfilled due to the tool error.\n\n"
-                    "Begin by analyzing the user's request, paying close attention to any date/time specifics, and plan your tool usage by carefully reading each tool's description for guidance."
+                    "Begin by analyzing the user's request, utilizing the CURRENT DATE CONTEXT for any date-related interpretations, and plan your tool usage by carefully reading each tool's description for guidance. Be proactive in offering relevant enhancements to the plan."
                  ),
                  verbose_agent: bool = VERBOSE,
                  max_iterations: int = 8
@@ -53,6 +56,25 @@ class PlannerAgent:
         self.model_name = model_name
         self.verbose_agent = verbose_agent
         self.max_iterations = max_iterations
+
+        # --- Dynamic Date Information for the Prompt ---
+        now = datetime.now()
+        current_date_verbose = now.strftime('%A, %B %d, %Y') # e.g., "Saturday, May 25, 2025"
+        
+        # Calculate upcoming Saturday and Sunday
+        days_until_saturday = (5 - now.weekday() + 7) % 7 # 5 is Saturday's weekday index (0=Monday)
+        upcoming_saturday = now + timedelta(days=days_until_saturday)
+        upcoming_sunday = upcoming_saturday + timedelta(days=1)
+        
+        upcoming_saturday_date = upcoming_saturday.strftime('%Y-%m-%d')
+        upcoming_sunday_date = upcoming_sunday.strftime('%Y-%m-%d')
+
+        # Format the system message with the dynamic date information
+        system_message = system_message_template.format(
+            current_date_verbose=current_date_verbose,
+            upcoming_saturday_date=upcoming_saturday_date,
+            upcoming_sunday_date=upcoming_sunday_date
+        )
 
         self.tools = tools
         if not self.tools:
