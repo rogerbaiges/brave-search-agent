@@ -92,24 +92,32 @@ export default function BravePlayground() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);  // 4️⃣  Traer histórico de conversaciones al montar
+
   useEffect(() => {
     console.log('🔄 Cargando conversaciones desde backend...');
     fetch('http://localhost:5000/conversations')
       .then(res => res.json())
       .then(data => {
         console.log('📥 Conversaciones recibidas del backend:', data);
+
         // Asegurar que cada conversación tenga un orden
-        const historicoConOrden = {};
+        let historicoConOrden = {};
         Object.entries(data).forEach(([id, chat], index) => {
           historicoConOrden[id] = {
             ...chat,
             order: chat.order ?? index
           };
-        });
-        console.log('📋 Histórico con orden asignado:', historicoConOrden);
+        });        console.log('📋 Histórico con orden asignado:', historicoConOrden);
         setHistorico(historicoConOrden);
-        const ids = Object.keys(historicoConOrden);
-        if (ids.length) setChatId(ids[0]);
+        
+        // Seleccionar el chat que está más arriba (menor order)
+        const chatEntries = Object.entries(historicoConOrden);
+        if (chatEntries.length) {
+          const topChat = chatEntries
+            .map(([id, chat]) => ({ id, ...chat }))
+            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))[0];
+          setChatId(topChat.id);
+        }
       })
       .catch(error => {
         console.error('❌ Error al cargar conversaciones:', error);
@@ -231,10 +239,13 @@ export default function BravePlayground() {
       const nuevo = { ...prev };
       delete nuevo[id];
       return nuevo;
-    });
-    if (chatId === id) {
-      const ids = Object.keys(historico).filter(cid => cid !== id);
-      setChatId(ids.length ? ids[ids.length - 1] : null);
+    });    if (chatId === id) {
+      const remainingChats = Object.entries(historico)
+        .filter(([cid]) => cid !== id)
+        .map(([cid, chat]) => ({ id: cid, ...chat }))
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      
+      setChatId(remainingChats.length ? remainingChats[0].id : null);
       setMessages([]);
       setChatName('Nueva conversación');
     }
@@ -252,6 +263,7 @@ export default function BravePlayground() {
         imagenesPreviasRef.current = data.images || [];
       });
   }, []);
+
   const handleSend = async () => {
     if (!input.trim()) return;
 
@@ -466,8 +478,7 @@ export default function BravePlayground() {
           <div
             className="bg-gray-800 text-orange-100 border border-orange-400 rounded-lg p-4 mb-2"
             style={{ wordBreak: 'break-word' }}
-          >
-            <style>{`
+          >            <style>{`
               .html-token-block h1 { color: #fb923c; font-size: 1.5rem; font-weight: bold; margin: .5rem 0 .75rem; }
               .html-token-block h2 { color: #fdba74; font-size: 1.25rem; font-weight: bold; margin: .5rem 0; }
               .html-token-block p { margin-bottom: .5rem; color: #fef3c7; line-height: 1.6; }
@@ -484,6 +495,11 @@ export default function BravePlayground() {
               .html-token-block th { font-weight: bold; background: #fb923c; color: #18181b; }
               .html-token-block tr:nth-child(even) { background: #27272a; }
               .html-token-block tr:nth-child(odd) { background: #18181b; }
+              .html-token-block article { background: #1f2937; border-radius: .5rem; padding: 1rem; margin: 1rem 0; color: #fef3c7; box-shadow: 0 2px 8px rgba(251,146,60,.1); }
+              .html-token-block section { background: #374151; border-left: 4px solid #fb923c; padding: .75rem 1rem; margin: .75rem 0; color: #fef3c7; border-radius: 0 .25rem .25rem 0; }
+              .html-token-block section h1, .html-token-block section h2, .html-token-block section h3 { margin-top: 0; }
+              .html-token-block article header { border-bottom: 1px solid #fdba74; padding-bottom: .5rem; margin-bottom: .75rem; }
+              .html-token-block article footer { border-top: 1px solid #fdba74; padding-top: .5rem; margin-top: .75rem; color: #fdba74; font-size: .875rem; }
             `}</style>
             <div className="html-token-block" dangerouslySetInnerHTML={{ __html: html }} />
           </div>
@@ -659,7 +675,8 @@ export default function BravePlayground() {
             </div>
           </div>
 
-          {/* Conversaciones */}          <div className="flex-1 overflow-auto p-4 relative">
+          {/* Conversaciones */}          
+          <div className="flex-1 overflow-auto p-4 relative">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-semibold text-gray-300">Conversations</h2>
               <span className="text-xs text-gray-500 bg-gray-700/30 px-2 py-1 rounded-full">
@@ -716,7 +733,8 @@ export default function BravePlayground() {
                     {Object.entries(historico)
                       .map(([id, chat]) => ({ id, ...chat }))
                       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-                      .map((chat, idx) => (                        <Draggable key={chat.id} draggableId={chat.id} index={idx}>
+                      .map((chat, idx) => (                        
+                      <Draggable key={chat.id} draggableId={chat.id} index={idx}>
                           {(providedDraggable, snapshot) => (
                             <div
                               ref={providedDraggable.innerRef}
@@ -828,7 +846,7 @@ export default function BravePlayground() {
                 }}
                 className="mt-6 w-full p-3 bg-gradient-to-r from-orange-500 to-orange-600 rounded-xl text-white font-medium flex items-center justify-center gap-2 hover:scale-105 transition-all duration-200"
               >
-                <Plus size={16} /> Nueva conversación
+                <Plus size={16} /> New conversation
               </button>
             </div>
             {/* Clic fuera para cerrar */}
@@ -863,7 +881,7 @@ export default function BravePlayground() {
                 <h1 className="text-lg font-bold text-white truncate leading-tight">{chatName}</h1>
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-                  <span className="text-xs text-gray-400">En línea</span>
+                  <span className="text-xs text-gray-400">On line</span>
                 </div>
               </div>
             </div>
@@ -951,7 +969,7 @@ export default function BravePlayground() {
                           handleSend();
                         }
                       }}
-                      placeholder="¿Qué te gustaría saber hoy?"
+                      placeholder="¿How can I help you today?"
                       className="flex-1 bg-transparent outline-none text-white placeholder-gray-400 text-lg py-3 relative z-10"
                     />
                     
@@ -994,7 +1012,7 @@ export default function BravePlayground() {
                   
                   {/* Suggestion chips */}
                   <div className="flex flex-wrap gap-2 mt-6 justify-center animate-in fade-in duration-1000 delay-700">
-                    {['Investiga sobre IA', 'Noticias actuales', 'Explícame conceptos', 'Encuentra recursos'].map((suggestion, idx) => (
+                    {['Last AI news', 'Today\'s news', 'Explain something', 'Find websources'].map((suggestion, idx) => (
                       <button
                         key={idx}
                         onClick={() => setInput(suggestion)}
@@ -1042,7 +1060,7 @@ export default function BravePlayground() {
                               </div>
                               <div className="flex flex-col">
                                 <span className="text-sm font-medium text-orange-300">Brave Assistant</span>
-                                <span className="text-xs text-gray-400">Asistente de IA</span>
+                                <span className="text-xs text-gray-400">AI Tools</span>
                               </div>
                             </div>
                           )}
@@ -1108,7 +1126,7 @@ export default function BravePlayground() {
                     </div>
                     <div className="flex flex-col">
                       <span className="text-orange-300 font-medium">
-                        {planningEnabled ? '🧠 Analizando y planificando...' : '🔍 Buscando información...'}
+                        {planningEnabled ? '🧠 Analizing & planning...' : '🔍 Searching...'}
                       </span>
                       <div className="flex items-center gap-1 mt-1">
                         <div className="w-2 h-2 bg-orange-400 rounded-full animate-bounce" />
