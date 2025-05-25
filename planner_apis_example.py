@@ -3,6 +3,8 @@ import requests
 import json
 import pandas as pd
 from dotenv import load_dotenv
+from urllib.parse import urlencode
+from datetime import datetime
 
 # Load environment variables from .env file
 load_dotenv()
@@ -203,20 +205,73 @@ def route_api():
     print(f"\nTotal Recommended Distance: {total_dist:.2f} km")
     print(f"Total Recommended Duration: {total_dur:.2f} min")
 
+def format_datetime_for_google(dt: str) -> str:
+    """
+    Format datetime to YYYYMMDDTHHMMSS for Google Calendar links, in local time.
+    
+    Args:
+        dt (str): Datetime string in format 'YYYY-MM-DD HH:MM:SS'
+
+    Returns:
+        str: Google Calendar-compatible datetime (local time, no 'Z')
+    """
+    dt_obj = datetime.strptime(dt, "%Y-%m-%d %H:%M:%S")
+    return dt_obj.strftime("%Y%m%dT%H%M%S")
+
+def generate_google_calendar_link(summary: str, start_datetime: str, end_datetime: str,
+                                   location: str = "", description: str = "") -> str:
+    """
+    Generate a Google Calendar event creation URL with local time.
+
+    Args:
+        summary (str): Title of the event.
+        start_datetime (str): Start datetime in 'YYYY-MM-DD HH:MM:SS' (local time).
+        end_datetime (str): End datetime in 'YYYY-MM-DD HH:MM:SS' (local time).
+        location (str): Location of the event (optional).
+        description (str): Event description or notes (optional).
+
+    Returns:
+        str: A URL to pre-fill an event in Google Calendar.
+    """
+    start = format_datetime_for_google(start_datetime)
+    end = format_datetime_for_google(end_datetime)
+
+    params = {
+        "action": "TEMPLATE",
+        "text": summary,
+        "dates": f"{start}/{end}",  # Local time — no 'Z'
+        "details": description,
+        "location": location,
+    }
+
+    return "https://calendar.google.com/calendar/render?" + urlencode(params)
+
+
 if __name__ == "__main__":
     print("Welcome to the Weather and Route Planner API Example!")
     while True:
         print("\nChoose an option:")
         print("1. Check Weather")
         print("2. Calculate Route")
-        print("3. Exit")
-        choice = input("Enter your choice (1/2/3): ")
+        print("3. Add Event to Google Calendar")
+        print("4. Exit")
+        choice = input("Enter your choice (1/2/3/4): ")
 
         if choice == '1':
             weather_api()
         elif choice == '2':
             route_api()
         elif choice == '3':
+            summary = input("Enter event title: ")
+            start_datetime = input("Enter start datetime (YYYY-MM-DD HH:MM:SS): ")
+            end_datetime = input("Enter end datetime (YYYY-MM-DD HH:MM:SS): ")
+            location = input("Enter event location (optional): ")
+            description = input("Enter event description (optional): ")
+
+            link = generate_google_calendar_link(summary, start_datetime, end_datetime, location, description)
+            print("\nOpen this link to create the event in Google Calendar:")
+            print(link)
+        elif choice == '4':
             print("Exiting the program.")
             break
         else:
