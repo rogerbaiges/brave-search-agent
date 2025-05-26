@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, Too
 from langchain_core.tools import BaseTool # Use BaseTool for better type hinting if tools are classes
 
 # Tool imports
-from tools import general_web_search, extended_web_search, find_interesting_links, news_search, weather_search
+from tools import general_web_search, extended_web_search, find_interesting_links, news_search, weather_search, extract_web_content
 
 # Model names import
 from config import MAIN_MODEL, VERBOSE, IMAGES_DIR, SCREENSHOTS_DIR
@@ -30,7 +30,7 @@ class OptimizedLangchainAgent:
 	"""
 	def __init__(self,
 				 model_name: str = MAIN_MODEL,
-				 tools: List[Callable] = [general_web_search, extended_web_search, find_interesting_links, news_search, weather_search],
+				 tools: List[Callable] = [general_web_search, extended_web_search, find_interesting_links, news_search, weather_search, extract_web_content],
 				 verbose_agent: bool = VERBOSE,
 				 optimizations_enabled: bool = False,
 				 max_iterations: int = 5 # Add a safety break for tool loops

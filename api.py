@@ -14,6 +14,7 @@ from tools import (
     find_interesting_links,
     news_search,
     weather_search,
+    extract_web_content
 )
 from optimized_langchain_agent import OptimizedLangchainAgent
 from planner_agent import PlannerAgent
@@ -60,7 +61,6 @@ CORS(app)
 
 # Agentes globales
 search_agent = OptimizedLangchainAgent(
-    tools=[general_web_search, find_interesting_links, news_search, weather_search, extended_web_search],
     optimizations_enabled=False,
 )
 planner_agent = PlannerAgent(verbose_agent=True, max_iterations=15)

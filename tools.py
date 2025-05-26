@@ -12,7 +12,6 @@ import traceback
 
 from langchain.tools import tool
 from langchain_core.tools import ToolException
-# from langchain_community.tools import BraveSearch # No longer directly needed for general_web_search logic
 
 from config import VERBOSE, IMAGES_DIR, SCREENSHOTS_DIR
 
@@ -108,7 +107,7 @@ def _scrape_and_extract_text(url: str, timeout: int = 10, max_chars: int | None 
         response.raise_for_status()
         content_type = response.headers.get('content-type', '').lower()
         if 'html' not in content_type:
-            return None
+            return None # Changed from "" to None to indicate non-HTML or failure more clearly
         soup = BeautifulSoup(response.content, 'html.parser')
         for element in soup(["script", "style", "header", "footer", "nav", "aside", "form", "noscript", "button", "input"]):
             element.decompose()
@@ -122,11 +121,48 @@ def _scrape_and_extract_text(url: str, timeout: int = 10, max_chars: int | None 
             text = text[:max_chars] + "..."
         if VERBOSE: print(f"--- Scraped {len(text)} characters from {url} ---", file=sys.stderr)
         return text
-    except requests.exceptions.Timeout: return None
-    except requests.exceptions.RequestException: return None
+    except requests.exceptions.Timeout:
+        if VERBOSE: print(f"--- Scraping Timeout: {url} ---", file=sys.stderr); return None # Changed to None
+    except requests.exceptions.RequestException as e:
+        if VERBOSE: print(f"--- Scraping RequestException: {url} - {e} ---", file=sys.stderr); return None # Changed to None
     except Exception as e:
         if VERBOSE: print(f"--- Scraping Error (Parsing/Other): {url} - {e} ---", file=sys.stderr)
-        return None
+        return None # Changed to None
+
+@tool
+def extract_web_content(url: str, max_chars: Optional[int] = None) -> str:
+    """
+    Extracts the main textual content from a given URL. Specially useful for getting the subpages of a specific URL and therefore deepening the context of a specific URL.
+    Useful for getting detailed information directly from a specific web page
+    whose URL is already known (e.g., from a previous search or `find_interesting_links` tool call).
+
+    Use this tool ONLY when you already have a specific URL that you know contains
+    the information you need to answer the user's question, and you need the full
+    textual content of that page.
+
+    Do NOT use this tool for general web searches; use `general_web_search` or
+    `extended_web_search` instead. This tool does not browse or follow links;
+    it only extracts content from the *provided* URL.
+
+    Parameters:
+        url (str): The URL of the web page to extract content from.
+        max_chars (int, optional): Maximum number of characters to return from the page content.
+                                    If the content is longer, it will be truncated.
+
+    Returns:
+        str: The extracted textual content of the web page, or an error message if extraction fails.
+    """
+    if VERBOSE: print(f"--- TOOL: Extracting content from URL: {url} (max_chars: {max_chars}) ---", file=sys.stderr)
+    try:
+        content = _scrape_and_extract_text(url, max_chars=max_chars)
+        if content is None: # _scrape_and_extract_text now returns None on failure or non-HTML
+            return f"Error: Could not extract content from {url}. It might be non-HTML, inaccessible, or timed out."
+        return content
+    except Exception as e:
+        error_message = f"An unexpected error occurred during content extraction from {url}: {e}"
+        if VERBOSE: traceback.print_exc(file=sys.stderr)
+        raise ToolException(error_message) from e # Raise ToolException for proper agent handling
+
 
 @tool
 def extended_web_search(query: str, k: int = 3, freshness: Optional[str] = None) -> dict:
@@ -200,6 +236,9 @@ def extended_web_search(query: str, k: int = 3, freshness: Optional[str] = None)
             {"url": url, "content": scrape_results_map.get(url)}
             for url in urls_to_scrape
         ]
+        # Filter out entries where scraping failed
+        final_scraped_results = [r for r in final_scraped_results if r["content"] is not None]
+
         if VERBOSE: print(f"--- TOOL: Returning {len(final_scraped_results)} results ---", file=sys.stderr)
         return {"results": final_scraped_results}
 

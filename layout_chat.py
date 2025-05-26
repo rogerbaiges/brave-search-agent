@@ -77,6 +77,7 @@ class LayoutChat:
 				"    -   Insert images using `<figure>` with a relevant `<figcaption>` and a descriptive `alt` attribute for the `<img>` tag. Place them where they are most relevant to the text, **potentially using them as focal points or to break up text in a visually appealing way (e.g., alongside relevant text if semantically appropriate and achievable without CSS for positioning).**\n"
 				"    -   Do NOT invent image content; reference only provided images. The `alt` text should describe the image.\n"
 				"    -   Analyze the content of the provided 'Content Images' to understand their context and integrate them semantically where they add the most value to the 'Main Content'.\n"
+				"    -   Distribute the images conveniently within the text so each one is placed where it is most relevant to the surrounding text, enhancing understanding and engagement.\n"
 				"    -   DO NOT use the text or information *within* the images as information to output (i.e., no OCR). Images are only for visual enhancement of the textual output.\n"
 				"6.  **Layout Inspiration Screenshots (If provided):** Use these *solely* for high-level **structural and organizational ideas**. Look for **varied patterns** in how content is grouped, sequenced, or emphasized (e.g., use of columns suggested by structure, call-out sections, distinct content blocks). Do not attempt to replicate any visual styling (colors, fonts, specific spacing) or textual content from these inspiration images.\n"
 				"7.  **Link Handling - CRITICAL:**\n"
@@ -84,6 +85,7 @@ class LayoutChat:
 				"    -   Include as many relevant links as possible, provided they are explicitly given in the 'Main Content'.\n"
 				"    -   **ABSOLUTELY DO NOT invent, create, or generate any new URLs or links.**\n"
 				"    -   **DO NOT use placeholder links, example domains (e.g., `example.com`, `yourwebsite.com`), or descriptive text that implies a link without providing a real URL from the input (e.g., `<a>Link to official site</a>` without a `href`, or `<a>More Details Here</a>` without a `href`).**\n"
+				"    -   BE REALLY CAREFUL with links so you don't confuse one with another. Some links may be similar (e.g., they may share the same domain but have different paths), so ensure you are using the correct URL and descriptive text.\n"
 				"    -   If the 'Main Content' does not provide a specific URL for something, simply state the information without trying to create a link for it. It is better to have no link than a fake or placeholder link.\n"
 				"8.  **Final Output Only:** Your entire response must be *only* the enhanced HTML content. Do not include any CSS (`<style>` tags or inline `style` attributes), JavaScript (`<script>` tags), comments, preambles, apologies, self-corrections, notes, or explanations of your process (e.g., 'Here is the reformatted HTML:', 'I have structured this as follows:'). Start directly with the HTML (e.g., `<h1>` or the first `<p>`). Do not add any additional text before or after the HTML content.\n"
 				"9.  **No Images/Layout Screenshots Provided:** If no 'Content Images' or 'Layout Inspiration Screenshots' are provided, focus solely on reformatting and enhancing the 'Main Content' text using **creative and effective semantic HTML best practices** as outlined above, aiming for clarity, engagement, and varied structure.\n"
@@ -166,6 +168,20 @@ class LayoutChat:
 				return "image/png"
 		except:
 			return "image/png" # Default on error
+		
+	def _filter_agent_output(self, agent_output_str: str) -> str:
+		"""
+		Filters the agent output string to remove the content in <think> to </think> tags.
+		"""
+		start_tag = "<think>"
+		end_tag = "</think>"
+		start_index = agent_output_str.find(start_tag)
+		end_index = agent_output_str.find(end_tag, start_index + len(start_tag))
+
+		if start_index != -1 and end_index != -1:
+			# Remove the content between <think> and </think>
+			return agent_output_str[:start_index] + agent_output_str[end_index + len(end_tag):]
+		return agent_output_str
 
 
 	def run(self,
@@ -199,6 +215,11 @@ class LayoutChat:
 		# 1. Prepare input for LAYOUT_MODEL
 		if self.verbose: print(f"--- LayoutChat: Preparing input for {self.layout_model_name} ---")
 
+		# Filter agent output to remove <think> tags if present
+		agent_output_str = self._filter_agent_output(agent_output_str)
+		if self.verbose:
+			print(f"--- LayoutChat: Filtered Agent Output to remove <think> tags (length: {len(agent_output_str)}) ---")
+		
 		human_message_content: List[Dict[str, Any]] = [
 			{
 				"type": "text",
@@ -210,7 +231,6 @@ class LayoutChat:
 					f"Respond with the best format in order to answer my initial query with an understandable, clear way for me."
 					f"Only answer with the final HTML content, no additional text or explanations.\n\n"
 					f"Main Content:\n---\n{agent_output_str}\n---"
-					# f"{link_context_text}" # If you were to use the optional link extraction
 				)
 			}
 		]
@@ -288,6 +308,10 @@ class LayoutChat:
 			# self.chat_history.append(AIMessage(content=final_response_str))
 			# if len(self.chat_history) > 10:
 			# 	self.chat_history = self.chat_history[-10:]
+
+			if self.verbose:
+				print(f"\n--- LayoutChat: Final response from {self.layout_model_name} (length: {len(final_response_str)}) ---")
+				print(final_response_str)
 
 		except Exception as e:
 			error_message = f"[LayoutChat Error: Error during layout model streaming: {e}]"
