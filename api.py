@@ -87,6 +87,7 @@ def search():
 
     prompt = (
         f"{system_date}\n"
+        "The user is from Spain, Barcelona. "
         "Below is the conversation history between a user and an assistant. "
         "Use this context to answer coherently and relevantly in the user's language.\n"
         "--- Conversation History ---\n"

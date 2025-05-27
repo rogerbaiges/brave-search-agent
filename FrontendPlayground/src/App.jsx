@@ -43,7 +43,7 @@ export default function BravePlayground() {
   // --- NUEVOS ESTADOS PARA GESTIÓN DE CHATS ---
   const [historico, setHistorico] = useState({});
   const [chatId, setChatId] = useState(null);
-  const [chatName, setChatName] = useState('Nueva conversación');
+  const [chatName, setChatName] = useState('New conversation');
   const [showNewChatModal, setShowNewChatModal] = useState(false);
   const [showRenameModal, setShowRenameModal] = useState(false);
   const [newChatName, setNewChatName] = useState('');
@@ -128,10 +128,10 @@ export default function BravePlayground() {
   useEffect(() => {
     if (chatId && historico[chatId]) {
       setMessages(historico[chatId].messages || []);
-      setChatName(historico[chatId].name || 'Nueva conversación');
+      setChatName(historico[chatId].name || 'New conversation');
     } else if (chatId) {
       setMessages([]);
-      setChatName('Nueva conversación');
+      setChatName('New conversation');
     }
   }, [chatId, historico]);
 
@@ -173,7 +173,7 @@ export default function BravePlayground() {
     
     // Si hay carga en progreso, mostrar indicador de que se cambió de conversación
     if (loading) {
-      setCompletionMessage('Conversación cambiada durante la operación 🔄');
+      setCompletionMessage('Conversation changed during search 🔄');
       setShowCompletionNotification(true);
       setTimeout(() => {
         setShowCompletionNotification(false);
@@ -524,7 +524,7 @@ export default function BravePlayground() {
               .html-token-block th { font-weight: bold; background: #fb923c; color: #18181b; }
               .html-token-block tr:nth-child(even) { background: #27272a; }
               .html-token-block tr:nth-child(odd) { background: #18181b; }
-              .html-token-block article { background: #1f2937; border-radius: .5rem; padding: 1rem; margin: 1rem 0; color: #fef3c7; box-shadow: 0 2px 8px rgba(251,146,60,.1); }
+              .html-token-block article { background: #1f2937; border-radius: .5rem; padding: 1rem; margin: 1rem 0; color: #fef3c7; box-shadow: 0 2px 16px rgba(251,146,60,0.85); }
               .html-token-block section { background: #374151; border-left: 4px solid #fb923c; padding: .75rem 1rem; margin: .75rem 0; color: #fef3c7; border-radius: 0 .25rem .25rem 0; }
               .html-token-block section h1, .html-token-block section h2, .html-token-block section h3 { margin-top: 0; }
               .html-token-block article header { border-bottom: 1px solid #fdba74; padding-bottom: .5rem; margin-bottom: .75rem; }
@@ -592,11 +592,11 @@ export default function BravePlayground() {
               <div className="p-2 bg-orange-500/20 rounded-lg">
                 <MessageSquare className="w-5 h-5 text-orange-400" />
               </div>
-              <h2 className="text-xl font-bold text-white">Nueva Conversación</h2>
+              <h2 className="text-xl font-bold text-white">New conversation</h2>
             </div>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">Nombre de la conversación</label>
+                <label className="block text-sm font-medium text-gray-300 mb-2">Conversation's name</label>
                 <input
                   className="w-full p-3 rounded-xl bg-gray-900/50 border border-gray-600/50 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-500/50 focus:border-orange-400 transition-all duration-200"
                   value={newChatName}
@@ -631,11 +631,11 @@ export default function BravePlayground() {
               <div className="p-2 bg-orange-500/20 rounded-lg">
                 <Edit3 className="w-5 h-5 text-orange-400" />
               </div>
-              <h2 className="text-xl font-bold text-white">Renombrar Conversación</h2>
+              <h2 className="text-xl font-bold text-white">Rename conversation</h2>
             </div>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">Nuevo nombre</label>
+                <label className="block text-sm font-medium text-gray-300 mb-2">New name</label>
                 <input
                   className="w-full p-3 rounded-xl bg-gray-900/50 border border-gray-600/50 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-500/50 focus:border-orange-400 transition-all duration-200"
                   value={renameChatName}
