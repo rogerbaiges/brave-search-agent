@@ -14,7 +14,8 @@ from tools import (
     find_interesting_links,
     news_search,
     weather_search,
-    extract_web_content
+    extract_web_content,
+    image_search
 )
 from optimized_langchain_agent import OptimizedLangchainAgent
 from planner_agent import PlannerAgent

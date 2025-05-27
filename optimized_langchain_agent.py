@@ -1,5 +1,3 @@
-# --- START OF FILE optimized_langchain_agent.py ---
-
 import sys
 import os
 import shutil
@@ -10,12 +8,12 @@ import json
 
 # Langchain imports
 from langchain_ollama.chat_models import ChatOllama
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage, BaseMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage, BaseMessage, SystemMessage
 from langchain_core.tools import BaseTool # Use BaseTool for better type hinting if tools are classes
 
 # Tool imports
-from tools import general_web_search, extended_web_search, find_interesting_links, news_search, weather_search, extract_web_content
+from tools import general_web_search, extended_web_search, find_interesting_links, news_search, weather_search, extract_web_content, image_search
 
 # Model names import
 from config import MAIN_MODEL, VERBOSE, IMAGES_DIR, SCREENSHOTS_DIR
@@ -32,7 +30,7 @@ class OptimizedLangchainAgent:
 	"""
 	def __init__(self,
 				 model_name: str = MAIN_MODEL,
-				 tools: List[Callable] = [general_web_search, extended_web_search, find_interesting_links, news_search, weather_search, extract_web_content],
+				 tools: List[Callable] = [general_web_search, extended_web_search, find_interesting_links, news_search, weather_search, extract_web_content, image_search],
 				 verbose_agent: bool = VERBOSE,
 				 optimizations_enabled: bool = False,
 				 max_iterations: int = 5 # Add a safety break for tool loops
@@ -122,19 +120,31 @@ class OptimizedLangchainAgent:
 
 		try:
 			output = selected_tool.invoke(tool_args)
-			# Ensure output is a string for ToolMessage content
-			if not isinstance(output, str):
-				try:
-					if isinstance(output, (dict, list)):
-						# Convert dicts/lists to JSON string for clarity in ToolMessage content
-						output_content = json.dumps(output, indent=2)
-					else:
-						output_content = str(output)
-				except TypeError:
-					# Fallback for objects that cannot be json.dumps
-					output_content = str(output)
+
+			# --- START NEW/MODIFIED LOGIC FOR TOOL OUTPUT PROCESSING ---
+			output_content: str = "" # Initialize for clarity
+
+			if tool_name == "image_search":
+				# Special handling for image_search:
+				# Provide a minimal message to the LLM, but log full output for debugging
+				if self.verbose_agent:
+					print(f"--- Agent: Suppressing full output for '{tool_name}'. Full result: {output} ---", file=sys.stderr)
+				
+				# Construct a concise message for the LLM
+				num_images = len(output.get("images", [])) if isinstance(output, dict) else 0
+				output_content = f"True. images for the query {tool_args.get('query', '')} have been downloadad and the formatting AI will use them. DO NOT CALL `image_search` with the same query again (including similar queries that refer to the same entity or contept). Instead, move on to other entities/concepts or stop calling `image_search`."
 			else:
-				output_content = output
+				# Existing logic for other tools: convert output to string/JSON and potentially truncate
+				if not isinstance(output, str):
+					try:
+						if isinstance(output, (dict, list)):
+							output_content = json.dumps(output, indent=2)
+						else:
+							output_content = str(output)
+					except TypeError:
+						output_content = str(output)
+				else:
+					output_content = output
 
 			# Truncate large outputs for efficiency, only if optimizations_enabled is True
 			if self.optimizations_enabled and len(output_content) > 1500:
@@ -282,7 +292,6 @@ class OptimizedLangchainAgent:
 				   empty_data_folders: bool = True,
 				   data_folders: list[str] = [IMAGES_DIR, SCREENSHOTS_DIR],
 				   layout_inspiration_image_paths: Optional[List[str]] = None,
-				   html_output: bool = True
 				   ) -> Iterator[str]:
 		if self.verbose_agent:
 			print(f"\n--- Task Received for Run with Layout ---\n{task}")
@@ -373,12 +382,11 @@ class OptimizedLangchainAgent:
 		# 5. Initialize LayoutChat and stream its formatted response
 		try:
 			if self.verbose_agent: print("\n--- Initializing LayoutChat for Enhanced Formatting ---", file=sys.stderr)
-			layout_chat_instance = LayoutChat(verbose=self.verbose_agent, html_output=html_output)
+			layout_chat_instance = LayoutChat(verbose=self.verbose_agent)
 
 			if self.verbose_agent: print("--- Calling LayoutChat.run() for final formatted response ---", file=sys.stderr)
 
-			if html_output:
-				yield "<html_token>"
+			yield "<html_token>" # For frontend to know this is a layout chat response in HTML format
 				
 			for chunk in layout_chat_instance.run(
 				agent_output_str=agent_output_str,
@@ -388,8 +396,7 @@ class OptimizedLangchainAgent:
 			):
 				yield chunk
 			
-			if html_output:
-				yield "</html_token>"
+			yield "</html_token>" # For frontend to know this is the end of layout chat response
 
 			if agent_output_str.strip() or newly_generated_content_images or final_layout_inspiration_images : print() # Add a newline after layout chat if there was input
 		
