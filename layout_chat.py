@@ -205,7 +205,8 @@ class LayoutChat:
 		if self.verbose:
 			print(f"--- LayoutChat: Filtered Agent Output to remove <think> tags (length: {len(agent_output_str)}) ---")
 
-		layout_inspiration_screenshots = layout_inspiration_screenshots[:3] # Limit to first 3 screenshots
+		layout_inspiration_screenshots = layout_inspiration_screenshots[:2] # Limit to first 2 screenshots
+		content_images = content_images[:4] # Limit to first 4 images
 		
 		human_message_content: List[Dict[str, Any]] = [
 			{
