@@ -95,7 +95,6 @@ class BraveSearchManual:
 				params = {
 					"q": query,
 					"count": min(count, 20),
-					"cr": "countryES",  # Country code for Spain
 					**kwargs
 				}
 				try:
@@ -144,6 +143,7 @@ class BraveSearchManual:
 			"q": query,           # Search query
 			"num": num_results,   # Number of results (max 10 for Google CSE)
 			"cx": GOOGLE_CX_ID,   # Custom Search Engine ID
+			"cr": "countryES",    # Restrict results to Spain
 			**kwargs              # Pass through any other valid Google CSE parameters
 		}
 
