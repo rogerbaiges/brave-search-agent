@@ -602,7 +602,7 @@ export default function BravePlayground() {
                   value={newChatName}
                   onChange={e => setNewChatName(e.target.value)}
                   autoFocus
-                  placeholder="Ejemplo: Investigación sobre IA"
+                  placeholder="Example: AI Latest News"
                 />
               </div>
             </div>
@@ -611,13 +611,13 @@ export default function BravePlayground() {
                 onClick={() => setShowNewChatModal(false)}
                 className="px-6 py-2.5 bg-gray-700/50 hover:bg-gray-600/50 rounded-xl text-gray-300 font-medium transition-all duration-200 hover:scale-105"
               >
-                Cancelar
+                Cancel
               </button>
               <button
                 onClick={createChat}
                 className="px-6 py-2.5 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 rounded-xl text-white font-medium transition-all duration-200 hover:scale-105 shadow-lg"
               >
-                Crear
+                Create
               </button>
             </div>
           </div>
@@ -968,14 +968,14 @@ export default function BravePlayground() {
                 {/* Welcome text with typing effect */}
                 <div className="text-center mb-8 space-y-4">
                   <div className="text-4xl font-bold bg-gradient-to-r from-orange-400 via-orange-500 to-orange-600 bg-clip-text text-transparent animate-in slide-in-from-bottom-4 duration-1000">
-                    Bienvenido a Brave Search
+                    Welcome to Brave Search
                   </div>
                   <div className="text-xl text-orange-100/80 animate-in slide-in-from-bottom-4 duration-1000 delay-300">
-                    Tu asistente de búsqueda inteligente
+                    Your AI-powered search assistant
                   </div>
                   <div className="flex items-center justify-center gap-2 text-sm text-gray-400 animate-in fade-in duration-1000 delay-500">
                     <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
-                    <span>Listo para ayudarte</span>
+                    <span>Ready to help you</span>
                   </div>
                 </div>
 
