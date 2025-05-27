@@ -67,7 +67,7 @@ def general_web_search(query: str, k: int = 3, freshness: Optional[str] = None) 
 				query=query,
 				save_to_dir=IMAGES_DIR,
 				count=max(2, k), # Ensure at least 2 images
-				save_basename=f"{datetime.now().strftime('%d-%m-%y_%H:%M')}_web_search_img_{_generate_safe_filename(query)}",
+				save_basename=f"{datetime.now().strftime('%d-%m-%y_%H_%M')}_web_search_img_{_generate_safe_filename(query)}",
 				freshness=freshness # Pass freshness to image search
 			)
 		except Exception as e_img:
@@ -79,7 +79,7 @@ def general_web_search(query: str, k: int = 3, freshness: Optional[str] = None) 
 			for i, result in enumerate(results_list):
 				url = result.get("url")
 				if url:
-					ss_filename = f"{datetime.now().strftime('%d-%m-%y_%H:%M')}_general_search_ss_{query_slug}_{i}.png"
+					ss_filename = f"{datetime.now().strftime('%d-%m-%y_%H_%M')}_general_search_ss_{query_slug}_{i}.png"
 					ss_path = os.path.join(SCREENSHOTS_DIR, ss_filename)
 					try:
 						if VERBOSE: print(f"--- Taking screenshot for general_web_search: {url} -> {ss_path} ---", file=sys.stderr)
@@ -197,7 +197,7 @@ def extended_web_search(query: str, k: int = 2, freshness: Optional[str] = None,
 				query=query,
 				save_to_dir=IMAGES_DIR,
 				count=max(2, num_to_scrape),  # Ensure at least 2 images
-				save_basename=f"{datetime.now().strftime('%d-%m-%y_%H:%M')}_extended_search_img_{_generate_safe_filename(query)}",
+				save_basename=f"{datetime.now().strftime('%d-%m-%y_%H_%M')}_extended_search_img_{_generate_safe_filename(query)}",
 				freshness=freshness # Pass freshness to image search
 			)
 		except Exception as e_img:
@@ -212,7 +212,7 @@ def extended_web_search(query: str, k: int = 2, freshness: Optional[str] = None,
 		os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 		query_slug = _generate_safe_filename(query)
 		for i, url in enumerate(urls_to_scrape):
-			ss_filename = f"{datetime.now().strftime('%d-%m-%y_%H:%M')}_extended_search_ss_{query_slug}_{i}.png"
+			ss_filename = f"{datetime.now().strftime('%d-%m-%y_%H_%M')}_extended_search_ss_{query_slug}_{i}.png"
 			ss_path = os.path.join(SCREENSHOTS_DIR, ss_filename)
 			try:
 				if VERBOSE: print(f"--- Taking screenshot for extended_web_search: {url} -> {ss_path} ---", file=sys.stderr)
@@ -429,7 +429,7 @@ def image_search(query: str, k: int = 1, freshness: Optional[str] = None) -> dic
 	try:
 		images = _brave_search_client.search_images(
 			query, save_to_dir=IMAGES_DIR,
-			save_basename=f"{datetime.now().strftime('%d-%m-%y_%H:%M')}_image_search_{_generate_safe_filename(query)}", count=k,
+			save_basename=f"{datetime.now().strftime('%d-%m-%y_%H_%M')}_image_search_{_generate_safe_filename(query)}", count=k,
 			freshness=freshness # Pass freshness to image search
 		)
 		return {"images": images}
@@ -463,7 +463,7 @@ def news_search(query: str, k: int = 3, freshness: Optional[str] = None) -> dict
 		
 		_brave_search_client.search_images(
 			query, save_to_dir=IMAGES_DIR, count=max(2, k),  # Ensure at least 2 images
-			save_basename=f"{datetime.now().strftime('%d-%m-%y_%H:%M')}_news_search_img_{_generate_safe_filename(query)}",
+			save_basename=f"{datetime.now().strftime('%d-%m-%y_%H_%M')}_news_search_img_{_generate_safe_filename(query)}",
 			freshness=freshness # Pass freshness to image search
 		)
 		# with open("search_results.txt", "a") as f:
@@ -557,7 +557,7 @@ def weather_search(city: str, num_days: int = 5) -> str:
 		for entry in fc_data.get('list', []):
 			dt_txt = entry.get('dt_txt')
 			if not dt_txt: continue
-			try: entry_date = datetime.strptime(dt_txt, '%Y-%m-%d %H:%M:%S').date()
+			try: entry_date = datetime.strptime(dt_txt, '%Y-%m-%d %H_%M:%S').date()
 			except ValueError: continue
 			if entry_date not in targets: continue
 			if entry_date not in daily_summary: daily_summary[entry_date] = {'temps':[],'winds':[],'desc':set()}
