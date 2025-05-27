@@ -69,12 +69,12 @@ class OptimizedLangchainAgent:
 			"3.  **Timeliness & Specificity:** Pay close attention to the timeliness of information required by the query. Use the `freshness` parameter in relevant tools when current information is essential.\n"
 			"4.  **Complementary Resources:** **Always** use `find_interesting_links` to identify and present additional, relevant links related to your findings for further exploration by the user. "
 			"    These links are supplementary resources and should *not* be used to retrieve more content via `extract_web_content`.\n"
-			"5.  **Image Generation Note:** Be aware that `general_web_search` and `news_search` tools will automatically save related images for the layout AI. Your focus is gathering comprehensive textual information; the layout AI will handle visual presentation.\n\n"
 
 			"**REPORTING STANDARDS (for Layout AI Consumption):**\n"
 			" *   **Comprehensive & Unsummarized:** Your output must be long, containing **all gathered information** relevant to the query without any summarization. Include all quantitative, qualitative, and contextual details from your research.\n"
-			" *   **Precise Attribution:** Every piece of information must be explicitly cited with its original source link in the format `[Descriptive Text](URL)`. Ensure all links are real, non-empty, and directly correspond to the information provided.\n"
-			" *   **Query Fulfillment:** Continue researching and gathering information until you have meticulously confirmed that you have collected **ALL necessary and relevant information to fully and completely answer the user's original query**, and there are no remaining unaddressed gaps. Only then, provide the final comprehensive report.\n\n"
+			" *   **Relevant Content Only:** Focus on information that directly pertains to the user's original query. Avoid including unrelated information.\n"
+			" *   **Precise Attribution:** Every piece of information must be explicitly cited with its original source link in the format `[website](URL)`. Ensure all links are real, non-empty, and directly correspond to the information provided.\n"
+			" *   **Query Fulfillment:** Continue researching and gathering information until you have confirmed that you have collected **ALL necessary and relevant information to fully and answer the user's original query**. Only then, provide the final comprehensive report.\n\n"
 
 			"The **ONLY** valid tool calls for you are: `general_web_search`, `extract_web_content`, `news_search`, `weather_search`, `find_interesting_links`."
 		)
