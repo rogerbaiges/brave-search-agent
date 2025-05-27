@@ -139,7 +139,7 @@ export default function BravePlayground() {
   useEffect(() => {
     // Si antes estaba cargando y ahora no, mostrar notificación
     if (previousLoading && !loading) {
-      const message = planningEnabled ? 'Planificación completada ✨' : 'Búsqueda completada 🔍';
+      const message = planningEnabled ? 'Planning completed ✨' : 'Search completed 🔍';
       setCompletionMessage(message);
       setShowCompletionNotification(true);
       
@@ -155,7 +155,7 @@ export default function BravePlayground() {
    * ------------------------------------------------------------------*/
   // Función mejorada para cambiar de chat que funciona durante la carga
   function switchToChat(newChatId) {
-    console.log('🔄 Cambiando a chat:', newChatId, 'desde:', chatId);
+    console.log('🔄 Changing to chat:', newChatId, 'from:', chatId);
     
     // Guardar mensajes actuales en el histórico antes de cambiar
     if (chatId && messages.length > 0) {
@@ -186,7 +186,7 @@ export default function BravePlayground() {
     setShowNewChatModal(true);
   }
   async function createChat() {
-    const name = newChatName.trim() || 'Sin nombre';
+    const name = newChatName.trim() || 'Conversation';
     const res = await fetch('http://localhost:5000/conversation/new', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -216,16 +216,38 @@ export default function BravePlayground() {
     setRenameChatName(name);
     setShowRenameModal(true);
   }
-
-  function saveRenameChat() {
+  async function saveRenameChat() {
+    const trimmedName = renameChatName.trim() || 'Conversation';
+    
+    // Update local state
     setHistorico(prev => ({
       ...prev,
       [renameChatId]: {
         ...prev[renameChatId],
-        name: renameChatName.trim() || 'Sin nombre',
+        name: trimmedName,
       },
     }));
-    if (chatId === renameChatId) setChatName(renameChatName.trim() || 'Sin nombre');
+    
+    if (chatId === renameChatId) setChatName(trimmedName);
+    
+    // Update on the backend
+    try {
+      const response = await fetch('http://localhost:5000/conversation/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          id: renameChatId, 
+          name: trimmedName 
+        })
+      });
+      
+      if (!response.ok) {
+        console.error('Error al renombrar la conversación');
+      }
+    } catch (error) {
+      console.error('Error al enviar la solicitud de renombrado:', error);
+    }
+    
     setShowRenameModal(false);
   }
 
@@ -335,15 +357,15 @@ export default function BravePlayground() {
               }
               return updated;
             });
-          }
-
-          // Quitamos spinner al primer token
+          }          
           if (!firstTokenReceived && token && !done) {
-            setLoading(false);
-            firstTokenReceived = true;
+            const hasRealContent = token.replace('<html_token>', '').trim().length > 0;
+            if (hasRealContent) {
+              setLoading(false);
+              firstTokenReceived = true;
+            }
           }
 
-          // Si hemos terminado: añadimos imágenes nuevas y persistimos resultado
           if (done) {
             const res = await fetch('http://localhost:5000/images_list');
             const data = await res.json();
@@ -431,16 +453,13 @@ export default function BravePlayground() {
     }
   };
 
-  /* --------------------------------------------------------------------
-   *  RENDER MARKDOWN + BLOQUES HTML EMBEBIDOS
-   * ------------------------------------------------------------------*/
   function renderMessageContent(message) {
     let cleanContent = message.content
       .replace(/```html\s*/gi, '')
       .replace(/```/g, '');
 
-    // Eliminar cualquier bloque <style>...</style>
     cleanContent = cleanContent.replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, '');
+    cleanContent = cleanContent.replace(/<think[\s\S]*?>[\s\S]*?<\/think>/gi, '');
 
     const markdownComponents = {
       a: ({ node, ...props }) => (
@@ -460,9 +479,20 @@ export default function BravePlayground() {
 
     if (start !== -1) {
       const before = cleanContent.slice(0, start);
-      const html = end !== -1
+      let html = end !== -1
         ? cleanContent.slice(start + 12, end)
         : cleanContent.slice(start + 12);
+      
+      html = html.replace(/<!DOCTYPE[^>]*>|<html[^>]*>|<\/html>|<head>[\s\S]*?<\/head>/gi, '');
+      
+      html = html.replace(/<body[^>]*>([\s\S]*)<\/body>/i, '$1');
+      
+      html = html.replace(/^\s+/, '');
+      
+      html = html.replace(/<br\s*\/?>\s*(<br\s*\/?>)+/gi, '<br/>');
+      html = html.replace(/<p>\s*<\/p>/gi, '');
+      html = html.replace(/<div>\s*<\/div>/gi, '');
+            
       const after = end !== -1 ? cleanContent.slice(end + 13) : '';
 
       return (
@@ -474,12 +504,11 @@ export default function BravePlayground() {
               rehypePlugins={[rehypeRaw]}
               components={markdownComponents}
             />
-          )}
-          <div
-            className="bg-gray-800 text-orange-100 border border-orange-400 rounded-lg p-4 mb-2"
-            style={{ wordBreak: 'break-word' }}
-          >            <style>{`
-              .html-token-block h1 { color: #fb923c; font-size: 1.5rem; font-weight: bold; margin: .5rem 0 .75rem; }
+          )}          <div
+            className="bg-gray-800 text-orange-100 border border-orange-400 rounded-lg p-8 mb-2"
+            style={{ wordBreak: 'break-word' }}>
+            <style>{`            
+              .html-token-block h1 { color: #fb923c; font-size: 1.5rem; font-weight: bold; margin: 0 0 .75rem; }
               .html-token-block h2 { color: #fdba74; font-size: 1.25rem; font-weight: bold; margin: .5rem 0; }
               .html-token-block p { margin-bottom: .5rem; color: #fef3c7; line-height: 1.6; }
               .html-token-block ul { margin-bottom: .5rem; padding-left: 1.5rem; list-style-type: disc; color: #fdba74; }
@@ -1027,7 +1056,11 @@ export default function BravePlayground() {
             ) : (
               <>
                 {messages.map((message, index) => {
-                  if (loading && index === messages.length - 1 && message.role === 'assistant' && !message.content) {
+                  // Evitar renderizar mensajes del asistente vacíos o solo con <html_token>
+                  if (
+                    message.role === 'assistant' &&
+                    (!message.content || message.content.replace(/<html_token>/g, '').trim() === '')
+                  ) {
                     return null;
                   }
                   return (
@@ -1154,7 +1187,7 @@ export default function BravePlayground() {
                       handleSend();
                     }
                   }}
-                  placeholder={messages.length === 0 ? "¿Qué te gustaría saber hoy?" : "Continúa la conversación..."}
+                  placeholder={messages.length === 0 ? "What would you like to know today?" : "Continue the conversation..."}
                   className="flex-1 bg-transparent outline-none text-white placeholder-gray-400 text-base py-3 relative z-10"
                 />
                 <div className="flex items-center gap-3 relative z-10">

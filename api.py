@@ -205,6 +205,24 @@ def delete_conversation():
     return jsonify({"ok": True})
 
 
+@app.route("/conversation/rename", methods=["POST"])
+def rename_conversation():
+    body = request.get_json() or {}
+    chat_id = body.get("id")
+    new_name = body.get("name")
+    
+    if not chat_id or new_name is None:
+        return jsonify({"error": "Missing id or name"}), 400
+
+    historico = read_conversations()
+    if chat_id not in historico:
+        return jsonify({"error": "Chat not found"}), 404
+    
+    historico[chat_id]["name"] = new_name
+    write_conversations(historico)
+    return jsonify({"ok": True})
+
+
 # -------- Imágenes --------
 
 
